@@ -116,6 +116,7 @@ def run_dir(tmp_path: Path):
         records: list[dict] | None = None,
         tasks: list[str] | None = None,
         samples: int | None = None,
+        generation: dict | None = None,
     ) -> Path:
         root = tmp_path / label
         root.mkdir(parents=True, exist_ok=True)
@@ -123,11 +124,12 @@ def run_dir(tmp_path: Path):
         tasks = tasks or sorted({r["task"] for r in records})
         header = {
             "record_version": 2,
-            "modelbench": "1.0.0",
+            "modelbench": "1.1.0",
             "target": {"name": label, "base_url": "http://127.0.0.1:8080/v1", "model": label},
             "suite": {"id": "core-v2", "version": "2.0", "digest": "abc123", "tasks": tasks},
             "samples": samples or max((r["sample"] for r in records), default=1),
             "repair": True,
+            "generation": generation if generation is not None else {"temperature": 0.7, "top_p": 0.95, "seed": 42, "max_tokens": 8192},
             "status": "finished",
         }
         (root / "run.json").write_text(json.dumps(header), encoding="utf-8")

@@ -130,7 +130,11 @@ class Generation:
     top_p: float | None = 0.95
     top_k: int | None = None
     min_p: float | None = None
-    seed: int | None = None
+    # Pinned by default: the same model on the same endpoint can swing several
+    # points between runs unless the sampler is seeded. Sample n uses
+    # ``seed + n - 1``, so independent samples stay independent while the whole
+    # run stays reproducible.
+    seed: int | None = 42
     max_tokens: int = 8192
     retry_cap: int = 16384
 
@@ -225,7 +229,9 @@ class Target:
         return int(match.group(1)) if match else None
 
     # -- request building ------------------------------------------------- #
-    def request_body(self, messages: list[dict], max_tokens: int | None = None) -> dict[str, Any]:
+    def request_body(
+        self, messages: list[dict], max_tokens: int | None = None, seed: int | None = None
+    ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -237,6 +243,9 @@ class Target:
         if cap:
             body[self.token_field] = int(cap)
         body.update(self.generation.sampling_body())
+        if seed is not None:
+            # Per-sample seed from the runner; overrides the configured base.
+            body["seed"] = int(seed)
         body.update(self.extra_body)
         return body
 

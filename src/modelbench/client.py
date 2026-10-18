@@ -185,8 +185,9 @@ class ChatClient:
         messages: list[dict],
         max_tokens: int | None = None,
         raw_path: Path | None = None,
+        seed: int | None = None,
     ) -> ChatResult:
-        body = self.target.request_body(messages, max_tokens=max_tokens)
+        body = self.target.request_body(messages, max_tokens=max_tokens, seed=seed)
         payload = json.dumps(body).encode("utf-8")
         attempt = 0
         delay = 1.0

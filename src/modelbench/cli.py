@@ -16,6 +16,7 @@ import shutil
 import sys
 import tempfile
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from . import __version__
@@ -236,6 +237,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     }
     if any(value is not None for value in overrides.values()):
         target.generation = target.generation.merged(**overrides)
+    if getattr(args, "no_seed", False):
+        # Measuring an endpoint as it behaves unpinned; the report will say so.
+        target.generation = replace(target.generation, seed=None)
 
     label = args.name or target.name
     out = Path(args.out).expanduser() if args.out else Path("runs") / f"{label}-{suite.id}-{_stamp()}"
@@ -264,9 +268,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     gen = target.generation
     sampling = " ".join(
         f"{key}={value}"
-        for key, value in (("temp", gen.temperature), ("top_p", gen.top_p), ("top_k", gen.top_k), ("seed", gen.seed))
+        for key, value in (("temp", gen.temperature), ("top_p", gen.top_p), ("top_k", gen.top_k))
         if value is not None
     )
+    if gen.seed is None:
+        sampling += "  seed=not pinned (reproducibility depends on the backend)"
+    elif plan.samples > 1:
+        sampling += f"  seed={gen.seed} (+1 per sample)"
+    else:
+        sampling += f"  seed={gen.seed}"
     print(f"samples  {plan.samples}   repair={plan.repair}   order={plan.order}   {sampling}")
     print(f"output   {out}\n")
 
@@ -707,7 +717,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--temperature", type=float, default=None)
     p.add_argument("--top-p", type=float, default=None)
     p.add_argument("--top-k", type=int, default=None)
-    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--seed", type=int, default=None, help="base sampler seed; sample n uses seed+n-1")
+    p.add_argument(
+        "--no-seed",
+        action="store_true",
+        help="do not send a seed at all (measures an unpinned endpoint; not reproducible)",
+    )
     p.add_argument("--no-repair", action="store_true", help="do not offer the feedback turn")
     p.add_argument("--resume", action="store_true", help="skip task/sample pairs already recorded")
     p.add_argument("--no-warmup", action="store_true", help="skip the warm-up request")

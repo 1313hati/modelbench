@@ -26,6 +26,10 @@ suite_paths = ["suites"]
 # model you intend to compare, otherwise the numbers are not comparable.
 temperature = 1.0
 top_p = 0.95
+# Pinned by default: sample n of a task is sent with seed + n - 1, so the run
+# repeats while the samples stay independent. `modelbench run --no-seed` sends
+# no seed at all (for measuring how much an endpoint drifts on its own).
+seed = 42
 max_tokens = 8192     # fallback cap for tasks that do not set their own
 retry_cap = 16384     # cap for the single retry after finish_reason=length
 samples = 2           # independent samples per task

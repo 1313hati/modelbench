@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from modelbench.errors import ModelBenchError
-from modelbench.runner import resume_pairs
+from modelbench.runner import resume_pairs, sample_seed
 
 
 def write(path: Path, records: list[dict]) -> Path:
@@ -46,3 +46,10 @@ def test_resume_tolerates_legacy_records_without_provenance(tmp_path):
     legacy = {"task": "a", "sample": 1}
     path = write(tmp_path / "results.jsonl", [legacy])
     assert resume_pairs(path, "abc", "local") == {("a", 1)}
+
+
+def test_sample_seed_offsets_each_sample():
+    assert sample_seed(42, 1) == 42
+    assert sample_seed(42, 2) == 43
+    assert sample_seed(0, 3) == 2
+    assert sample_seed(None, 2) is None

@@ -15,6 +15,7 @@ from modelbench.report import (
     render_json,
     render_markdown,
     run_metrics,
+    sampling_conflicts,
     write_reports,
 )
 
@@ -164,3 +165,33 @@ def test_failure_signatures_group_by_assertion_name(run_dir, record):
     assert rows[0]["records"] == 2  # counted once per record, not per duplicate line
     assert rows[0]["task_count"] == 1
     assert "## Where it fails" in render_markdown([run])
+
+
+def test_sampling_conflicts_name_the_differing_fields(run_dir, record):
+    a = run_dir("a", [record(task="t01", sample=1)], generation={"temperature": 0.7, "seed": 42})
+    b = run_dir("b", [record(task="t01", sample=1)], generation={"temperature": 1.0, "seed": 42})
+    runs = load_runs([a, b])
+    assert sampling_conflicts(runs) == ["temperature"]
+    md = render_markdown(runs)
+    assert "Sampling differs between runs" in md
+    assert "temperature: 0.7 vs 1" in md
+    assert 'class="warn"' in render_html(runs)
+
+
+def test_identical_sampling_is_not_a_warning(run_dir, record):
+    a = run_dir("a", [record(task="t01", sample=1)])
+    b = run_dir("b", [record(task="t01", sample=1)])
+    runs = load_runs([a, b])
+    assert sampling_conflicts(runs) == []
+    md = render_markdown(runs)
+    assert "Sampling differs" not in md
+    assert "seed 42" in md
+    assert "class=\"warn\"" not in render_html(runs)
+
+
+def test_unpinned_seed_is_called_out(run_dir, record):
+    run = run_dir("loose", [record(task="t01", sample=1)], generation={"temperature": 0.7, "seed": None})
+    md = render_markdown([load_runs([run])[0]])
+    assert "not pinned" in md
+    page = render_html([load_runs([run])[0]])
+    assert "not pinned" in page

@@ -44,6 +44,17 @@ def resume_pairs(results_path: Path, suite_digest: str, target_name: str) -> set
     return existing
 
 
+def sample_seed(base: int | None, sample: int) -> int | None:
+    """Seed for the n-th sample of a task.
+
+    Two samples sent with the same seed are one sample counted twice: the
+    stability rows would read 0.0 spread and hide real run-to-run variance.
+    Offsetting by sample keeps the samples independent while the whole run stays
+    reproducible from the base seed.
+    """
+    return None if base is None else int(base) + max(0, int(sample) - 1)
+
+
 @dataclass
 class RunPlan:
     suite: Suite
@@ -206,13 +217,19 @@ class Runner:
 
         wall_start = time.time()
         extra: list[dict] = []
+        seed = sample_seed(plan.target.generation.seed, sample)
 
-        result = self.client.chat([{"role": "user", "content": prompt}], max_tokens=cap, raw_path=raw_path)
+        result = self.client.chat(
+            [{"role": "user", "content": prompt}], max_tokens=cap, raw_path=raw_path, seed=seed
+        )
         retried = False
         if result.truncated and retry_cap and retry_cap > cap:
             extra.append(self._extra_call(result, cap))
             result = self.client.chat(
-                [{"role": "user", "content": prompt}], max_tokens=retry_cap, raw_path=raw_path
+                [{"role": "user", "content": prompt}],
+                max_tokens=retry_cap,
+                raw_path=raw_path,
+                seed=seed,
             )
             retried = True
 
@@ -236,11 +253,13 @@ class Runner:
                 {"role": "user", "content": build_repair_prompt("\n".join(graded.failures))},
             ]
             repair_raw = sample_dir / "raw" / f"{task.id}.repair.txt"
-            repair_result = self.client.chat(messages, max_tokens=cap, raw_path=repair_raw)
+            repair_result = self.client.chat(messages, max_tokens=cap, raw_path=repair_raw, seed=seed)
             repair_extra: list[dict] = []
             if repair_result.truncated and retry_cap and retry_cap > cap:
                 repair_extra.append(self._extra_call(repair_result, cap))
-                repair_result = self.client.chat(messages, max_tokens=retry_cap, raw_path=repair_raw)
+                repair_result = self.client.chat(
+                    messages, max_tokens=retry_cap, raw_path=repair_raw, seed=seed
+                )
             repair_solution, repair_source, repair_written = task.write_solution(
                 repair_result.content, sol_dir / "repair"
             )
@@ -268,6 +287,7 @@ class Runner:
             "kind": task.kind,
             "lang": task.lang,
             "sample": sample,
+            "seed": seed,
             "when": now_iso(),
             "prompt_chars": len(prompt),
             "first": first,

@@ -64,6 +64,7 @@ the difference is the model, not the harness.
 - [The suites](#the-suites)
 - [Beyond coding](#beyond-coding)
 - [Reading a report](#reading-a-report)
+- [Seeds, pins and drift](#seeds-pins-and-drift)
 - [Write your own suite](#write-your-own-suite)
 - [Check the harness without a model](#check-the-harness-without-a-model)
 - [Fairness checklist](#fairness-checklist)
@@ -151,7 +152,7 @@ Ollama and a hosted API. The keys that matter most:
 | `base_url` | endpoint root, usually ending in `/v1` |
 | `model` | model id sent in the request body (llama.cpp ignores it, hosted APIs do not) |
 | `api_key` / `api_key_env` | literal key, or the name of an env var holding it (preferred) |
-| `temperature`, `top_p`, `top_k`, `min_p`, `seed` | sampling; **keep identical across models you compare** |
+| `temperature`, `top_p`, `top_k`, `min_p`, `seed` | sampling; **keep identical across models you compare**. `seed` is pinned to 42 by default |
 | `max_tokens`, `retry_cap` | fallback cap, and the cap used for the one retry after `finish_reason=length` |
 | `timeout_s`, `connect_timeout_s`, `max_retries` | HTTP behaviour |
 | `headers`, `extra_body` | provider-specific additions merged into the request |
@@ -211,7 +212,8 @@ Useful flags:
 | `--samples N` | independent samples per task (default 2; use ≥3 for close models) |
 | `--only`, `--exclude` | comma-separated task ids |
 | `--max-tokens`, `--retry-cap` | override the caps from task metadata |
-| `--temperature`, `--top-p`, `--top-k`, `--seed` | override sampling for this run |
+| `--temperature`, `--top-p`, `--top-k`, `--seed` | override sampling for this run (`seed` is sample 1; sample *n* uses `seed+n-1`) |
+| `--no-seed` | send no seed at all, to measure an endpoint's own drift |
 | `--no-repair` | grade the first answer only |
 | `--resume` | skip task/sample pairs already in `results.jsonl` |
 | `--order task` | run all samples of a task back-to-back instead of interleaved |
@@ -398,6 +400,62 @@ task: it writes `errors.log`, keeps the successful records, and marks the run
 incomplete. `modelbench report --strict` turns that into exit code 1, which is
 what you want in CI.
 
+## Seeds, pins and drift
+
+The same model on the same endpoint can swing several points between runs.
+That is not the model changing its mind, it is sampling: a one-word difference
+in a generated token can flip an entire assertion, and with `temperature` above
+zero the sampler is free to pick it on one run and not the next.
+
+modelbench pins the sampler by default, because a comparison of two runs that
+were sampled differently is not a comparison of two models:
+
+| setting | default | note |
+|---|---|---|
+| `temperature` | `1.0` | recorded in `run.json`, printed before the first request |
+| `top_p` | `0.95` | — |
+| `seed` | `42` | **sample *n* is sent with `seed + n - 1`** |
+| `samples` | `2` | independent prompts-with-different-seeds, not reruns of one |
+
+The per-sample offset matters. Two samples sent with the identical seed are one
+sample counted twice: the stability rows would read `0.0 pp spread` for every
+task and quietly hide the variance you were trying to measure. Sample 1 goes out
+with seed 42, sample 2 with 43 — independent draws from a reproducible run.
+
+Override for one run with `--temperature`, `--top-p`, `--top-k`, `--seed`. To
+measure how much an endpoint drifts *without* a seed, pass `--no-seed`: nothing
+is sent, the run header and the report say `seed not pinned`, and you have
+bought honesty at the price of not being able to reproduce the run exactly.
+
+What the report does with this:
+
+- **Provenance** lists temperature and seed per run, and `not pinned` in red
+  when a run has no seed;
+- **Sample stability** compares the samples of each task, so a model that is
+  noisy on its own shows up as noisy rather than as "89%";
+- **Comparing runs sampled differently** puts a warning above the fold naming
+  the fields that differ (`temperature: 0.2 vs 1`, `seed: 42 vs not set`) and
+  tells you to re-run before reading a winner into it.
+
+A practical protocol for a comparison you intend to publish:
+
+```bash
+# same suite, same sampling, seeds pinned, three samples
+modelbench run --target a --samples 3 --out runs/a
+modelbench run --target b --samples 3 --out runs/b
+modelbench report runs/a runs/b --strict
+```
+
+If the two runs come out within a point of each other, raise `--samples` or
+accept that the task suite cannot separate them. Do not lower the temperature
+until the winner appears — that is the modelbench equivalent of p-hacking.
+
+Local backends are not equally honest about seeds. llama.cpp with a fixed seed,
+a warm cache and greedy-ish sampling (`top_k` small, `temperature` low) is close
+to deterministic; many hosted providers ignore `seed` entirely or only promise
+"best effort". The sample-stability rows are how you find out which kind you are
+talking to before you publish anything.
+
 ## Write your own suite
 
 A suite is a directory:
@@ -505,6 +563,7 @@ with `curl` or test a client of your own.
 Before publishing a comparison, confirm:
 
 - [ ] every model used the **same config** (sampling, caps, repair on/off);
+- [ ] both runs sent a **pinned seed** with the same base (the report warns you when they did not);
 - [ ] the suite **digest** in each report matches;
 - [ ] `records / expected` is complete for every run, or the gap is stated;
 - [ ] samples ≥ 2, ideally 3, when the gap between models is under ~3 points;

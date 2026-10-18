@@ -51,6 +51,11 @@ class Run:
         return sorted({r["task"] for r in self.records})
 
     @property
+    def generation(self) -> dict:
+        """Sampler settings recorded in run.json (empty for hand-made runs)."""
+        return dict(self.header.get("generation") or {})
+
+    @property
     def samples(self) -> int:
         if self.header.get("samples"):
             return int(self.header["samples"])
@@ -99,6 +104,76 @@ def load_runs(paths: Iterable[str | Path]) -> list[Run]:
         if labels[run.label] > 1:
             run.label = f"{run.label}#{labels[run.label]}"
     return runs
+
+
+
+SAMPLING_KEYS = ("temperature", "top_p", "top_k", "min_p", "seed")
+
+
+def sampling(run: "Run") -> dict:
+    """Sampler settings for a run, falling back to what the records carry.
+
+    ``None`` means the field was never sent, which is a real difference from
+    "sent with the default value" and is shown as such.
+    """
+    gen = run.generation
+    out = {key: gen.get(key) for key in SAMPLING_KEYS}
+    if out["seed"] is None:
+        seeds = sorted({r.get("seed") for r in run.records if r.get("seed") is not None})
+        if seeds:
+            out["seed"] = seeds[0]
+    out["max_tokens"] = gen.get("max_tokens")
+    return out
+
+
+def sampling_note(run: "Run") -> str:
+    """One line of prose: how this run was sampled."""
+    s = sampling(run)
+    bits = []
+    if s["temperature"] is not None:
+        bits.append(f"temperature {_num(s['temperature'])}")
+    if s["top_p"] is not None:
+        bits.append(f"top_p {_num(s['top_p'])}")
+    if s["top_k"] is not None:
+        bits.append(f"top_k {_num(s['top_k'])}")
+    if s["min_p"] is not None:
+        bits.append(f"min_p {_num(s['min_p'])}")
+    if s["seed"] is None:
+        bits.append("seed not pinned")
+    elif run.samples > 1:
+        bits.append(f"seed {s['seed']} (+1 per sample)")
+    else:
+        bits.append(f"seed {s['seed']}")
+    if s["max_tokens"]:
+        bits.append(f"fallback cap {int(s['max_tokens']):,} tokens")
+    return ", ".join(bits)
+
+
+def _num(value) -> str:
+    """0.2 stays 0.2, 1.0 stays 1.0 — a sampler temperature is not a count."""
+    if isinstance(value, float):
+        return f"{value:g}" if value != int(value) else f"{value:.1f}"
+    return str(value)
+
+
+def sampling_conflicts(runs: Sequence["Run"]) -> list[str]:
+    """Fields that differ between runs — the usual cause of a fake delta.
+
+    A model re-run at temperature 0.2 and 1.0 is two experiments, not one.
+    """
+    if len(runs) < 2:
+        return []
+    conflicts = []
+    settings = [sampling(run) for run in runs]
+    for key in ("temperature", "top_p", "top_k", "min_p", "seed"):
+        values = [s[key] for s in settings]
+        if any(v is None for v in values):
+            if any(v is not None for v in values):
+                conflicts.append(key)
+            continue
+        if len({str(v) for v in values}) > 1:
+            conflicts.append(key)
+    return conflicts
 
 
 # --------------------------------------------------------------------------- #
@@ -432,8 +507,20 @@ def render_markdown(
         f"_Generated {generated or now_iso()} by modelbench {__version__}. "
         f"Suite{'s' if len(suite_ids) > 1 else ''}: "
         + ", ".join(f"`{s}`" for s in sorted(suite_ids))
-        + "._",
+        + ". _",
         "",
+    ]
+    conflicts = sampling_conflicts(runs)
+    if conflicts:
+        detail = "; ".join(f"{key}: " + " vs ".join(_num(sampling(r)[key]) if sampling(r)[key] is not None else "not set" for r in runs) for key in conflicts)
+        lines += [
+            f"**Sampling differs between runs** ({detail}). The sampler, not just the "
+            "model, differs from column to column: a few points of the gap can come from "
+            "temperature or an unpinned seed. Re-run both with identical settings before "
+            "reading a winner into this.",
+            "",
+        ]
+    lines += [
         "## Headline",
         "",
         "Scores are means over tasks (each task weighs the same), then over samples. "
@@ -550,6 +637,19 @@ def render_markdown(
             f"| {run.label} | {base_url} | {served} | {m['samples']} | {m['records']}/{m['expected']} | "
             f"`{run.suite_id}` | `{digest[:12]}` |"
         )
+    lines += [""]
+    for run in runs:
+        seed_state = sampling(run)["seed"]
+        pinned = "pinned" if seed_state is not None else "**not pinned** — this run is not reproducible"
+        lines.append(f"- **{run.label}** — {sampling_note(run)} ({pinned})")
+    lines += [
+        "",
+        "Sample *n* of a task uses `seed + n - 1`, so independent samples are independent "
+        "while the run stays repeatable. Backends differ in how honestly they honour a "
+        "seed: llama.cpp with a fixed seed and a warm cache is close to deterministic, "
+        "some hosted providers ignore it entirely. The sample-stability rows above are "
+        "how you find out which kind you are talking to.",
+    ]
 
     # -- integrity ------------------------------------------------------- #
     lines += ["", "## Integrity", ""]
@@ -666,6 +766,8 @@ h1{font-size:clamp(28px,4.4vw,46px);line-height:1.1;margin:0 0 10px;letter-spaci
   background:linear-gradient(92deg,var(--accent),var(--accent2));-webkit-background-clip:text;
   background-clip:text;color:transparent}
 .lede{color:var(--muted);margin:0 0 34px;max-width:70ch}
+.warn{background:rgba(245,158,11,.09);border:1px solid rgba(245,158,11,.35);border-left:3px solid #f59e0b;border-radius:10px;padding:14px 18px;margin:0 0 30px;color:#fcd8a0;font-size:13.5px;line-height:1.6;max-width:92ch}
+.warn b{color:#fbbf24}.bad{color:#f87171}
 h2{font-size:13px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
   margin:0 0 12px;font-weight:600}
 section{margin:38px 0}
@@ -800,6 +902,22 @@ def render_html(
         + f" · generated {_esc(generated)} by modelbench {__version__}."
     )
     parts.append(f'<p class="lede">{lede}</p>')
+
+    conflicts = sampling_conflicts(runs)
+    if conflicts:
+        detail = "; ".join(
+            f"{key}: "
+            + " vs ".join(
+                _num(sampling(r)[key]) if sampling(r)[key] is not None else "not set" for r in runs
+            )
+            for key in conflicts
+        )
+        parts.append(
+            '<div class="warn"><b>Sampling differs between runs.</b> '
+            f"{_esc(detail)}. The sampler, not just the model, differs from column to column: "
+            "a few points of the gap can come from temperature or an unpinned seed. Re-run both "
+            "with identical settings before reading a winner into this.</div>"
+        )
 
     # -- cards ------------------------------------------------------------ #
     cards = ['<section><h2>At a glance</h2><div class="cards">']
@@ -962,16 +1080,27 @@ def render_html(
         target = run.header.get("target") or {}
         served = target.get("served_id") or run.records[0].get("served_id") or target.get("model") or ""
         digest = (run.header.get("suite") or {}).get("digest") or run.records[0].get("suite_digest") or ""
+        s = sampling(run)
+        if s["seed"] is None:
+            seed_cell = '<span class="bad">not pinned</span>'
+        elif run.samples > 1:
+            seed_cell = f'<code>{s["seed"]}</code> <span class="muted">+1/sample</span>'
+        else:
+            seed_cell = f'<code>{s["seed"]}</code>'
+        temp_cell = _num(s["temperature"]) if s["temperature"] is not None else '<span class="muted">—</span>'
         rows.append(
             f"<tr><td>{_esc(run.label)}</td><td>{_esc(target.get('base_url') or '')}</td>"
             f"<td>{_esc(served)}</td><td class=\"num\">{m['samples']}</td>"
             f"<td class=\"num\">{m['records']}/{m['expected']}</td>"
+            f"<td class=\"num\">{temp_cell}</td>"
+            f"<td class=\"num\">{seed_cell}</td>"
             f"<td><code>{_esc(run.suite_id)}</code></td>"
             f"<td><code>{_esc(digest[:12])}</code></td></tr>"
         )
     parts.append(
         '<section><h2>Provenance</h2><table><thead><tr><th>run</th><th>endpoint</th>'
         "<th>served id</th><th class=\"num\">samples</th><th class=\"num\">records</th>"
+        "<th class=\"num\">temp</th><th class=\"num\">seed</th>"
         f"<th>suite</th><th>digest</th></tr></thead><tbody>{''.join(rows)}</tbody></table></section>"
     )
 

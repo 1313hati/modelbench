@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.2.0
+
+- Sampling is pinned by default: `seed = 42`, and sample *n* of a task is sent
+  with `seed + n - 1`. Previously an unset seed meant every sample inherited
+  whatever the backend did, and two samples of one task were not guaranteed to
+  be independent draws — a run could look stable because it was one sample
+  counted twice.
+- `run --no-seed` deliberately sends no seed, for measuring an endpoint's own
+  drift. The run header and the report both say `seed not pinned`.
+- Records now carry the seed actually used (`"seed": 43`), and `run.json`
+  keeps the base seed, so a record can be reproduced on its own.
+- Reports show sampling in Provenance (temperature, seed, `+1/sample`), flag
+  `not pinned` seeds, and put a warning above the fold when two compared runs
+  were sampled differently, naming the fields that differ.
+- README: new "Seeds, pins and drift" section on why this matters and what a
+  publishable comparison protocol looks like.
+
 ## 1.1.0
 
 - New: a standalone HTML report (`REPORT.html`) written next to `REPORT.md` by

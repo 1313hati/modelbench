@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from modelbench.config import Config, Generation, expand_env, find_config
+from modelbench.config import Config, Generation, Target, expand_env, find_config
 from modelbench.errors import ConfigError
 
 
@@ -88,3 +88,16 @@ def test_generation_merged_ignores_none():
     generation = Generation(temperature=0.5).merged(temperature=None, seed=3)
     assert generation.temperature == 0.5
     assert generation.seed == 3
+
+
+def test_sampling_is_pinned_by_default():
+    generation = Generation()
+    assert generation.seed == 42
+    assert generation.sampling_body()["seed"] == 42
+
+
+def test_request_body_takes_a_per_sample_seed():
+    target = Target(name="t", base_url="http://x/v1", model="m", generation=Generation())
+    body = target.request_body([{"role": "user", "content": "hi"}], max_tokens=64, seed=43)
+    assert body["seed"] == 43
+    assert body["max_tokens"] == 64
