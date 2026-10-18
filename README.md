@@ -217,6 +217,8 @@ Useful flags:
 | `--order task` | run all samples of a task back-to-back instead of interleaved |
 | `--out DIR`, `--name LABEL` | where to write, and how the run is labelled |
 | `--no-report` | skip `REPORT.md` (write it later with `modelbench report`) |
+| `--allow-missing-runners` | skip tasks whose runtime is absent instead of failing them |
+| `--no-manage-server` | ignore `start_cmd`/`stop_cmd` from the config |
 | `--fail-fast` | stop on the first task error |
 
 Exit codes: `0` complete, `1` completed with task errors, `2` configuration or
