@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.4.0
+
+- **A provisional ranking is not a ranking.** `Pairwise.samples_min` records the
+  fewest samples any task carries in either run. Below `--require-samples`
+  (default 3) the report prints a "Provisional ranking" banner, retitles the
+  per-task column from `winner` to `leader`, and the console verdict says
+  `provisional at N sample(s)/task`. `--require-samples 0` turns it off; the
+  older two-sample behaviour is `--require-samples 2`.
+- `summary.json` gains a top-level `evidence` block
+  (`samples_required`, `samples_per_task`, `provisional`) and per-pair
+  `noise_pp`, `decisive`, `samples_per_task`, `provisional`, so a CI job can
+  refuse to publish a provisional ranking without parsing prose.
+- `modelbench run --fail-under SCORE` exits 1 when the mean final task score is
+  below the bar (`0.9` and `90` both work). Pair it with `--no-report` for a
+  pure regression gate.
+- `Run.samples` property: the sample count a run actually carries.
+- 74 -> 78 tests (CLI gate, provisional rendering, evidence JSON).
+
 ## 1.3.0
 
 - `modelbench inspect RUN` triages a finished run: every record that lost points,

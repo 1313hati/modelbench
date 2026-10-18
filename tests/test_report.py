@@ -183,10 +183,11 @@ def test_identical_sampling_is_not_a_warning(run_dir, record):
     b = run_dir("b", [record(task="t01", sample=1)])
     runs = load_runs([a, b])
     assert sampling_conflicts(runs) == []
-    md = render_markdown(runs)
+    # require_samples=0 isolates the sampling warning from the sample-count one
+    md = render_markdown(runs, require_samples=0)
     assert "Sampling differs" not in md
     assert "seed 42" in md
-    assert "class=\"warn\"" not in render_html(runs)
+    assert "class=\"warn\"" not in render_html(runs, require_samples=0)
 
 
 def test_unpinned_seed_is_called_out(run_dir, record):
@@ -228,3 +229,36 @@ def test_pairwise_is_decisive_when_samples_agree(run_dir, record):
     assert pair.decisive is True
     md = render_markdown(runs)
     assert "inside the noise" not in md
+
+
+def test_thin_evidence_is_called_provisional(run_dir, record):
+    a = run_dir("a", [record(task="t01", sample=1, score=1.0), record(task="t01", sample=2, score=1.0)])
+    b = run_dir("b", [record(task="t01", sample=1, score=0.9), record(task="t01", sample=2, score=0.9)])
+    runs = load_runs([a, b])
+    pair = pairwise(runs[0], runs[1])
+    assert pair.samples_min == 2
+    assert pair.provisional(3) is True
+    assert pair.provisional(2) is False
+
+    md = render_markdown(runs)
+    assert "Provisional ranking — 2 samples per task" in md
+    assert "--samples 3" in md
+    assert "| leader |" in md  # the column stops claiming a winner
+    assert "Provisional ranking" in render_html(runs)
+    assert "provisional at 2 sample(s)/task" in render_console(runs)
+
+    # an explicit lower bar restores the winner column
+    relaxed = render_markdown(runs, require_samples=2)
+    assert "Provisional" not in relaxed
+    assert "| winner |" in relaxed
+
+
+def test_summary_json_carries_the_evidence_level(run_dir, record):
+    a = run_dir("a", [record(task="t01", sample=1, score=1.0)])
+    b = run_dir("b", [record(task="t01", sample=1, score=0.5)])
+    payload = render_json(load_runs([a, b]))
+    assert payload["evidence"] == {"samples_required": 3, "samples_per_task": 1, "provisional": True}
+    assert payload["pairwise"][0]["samples_per_task"] == 1
+    assert payload["pairwise"][0]["provisional"] is True
+    kept = render_json(load_runs([a, b]), require_samples=1)
+    assert kept["evidence"]["provisional"] is False

@@ -222,6 +222,7 @@ Useful flags:
 | `--out DIR`, `--name LABEL` | where to write, and how the run is labelled |
 | `--no-report` | skip `REPORT.md` (write it later with `modelbench report`) |
 | `--dry-run` | print the plan — tasks, caps, prompt size, call count, token ceiling — and exit without calling the endpoint |
+| `--fail-under SCORE` | exit 1 if the mean final task score lands below SCORE (`0.9` or `90`), for CI gates |
 | `--no-html`, `--html PATH` | skip the HTML page, or write it somewhere specific |
 | `--allow-missing-runners` | skip tasks whose runtime is absent instead of failing them |
 | `--no-manage-server` | ignore `start_cmd`/`stop_cmd` from the config |
@@ -258,7 +259,11 @@ best model instead of a delta. `--json` prints the machine-readable summary
 instead of writing files, and `--notes-file` appends your own context to the
 report. `--strict` exits 1 if any run is missing records, holds duplicates or
 carries task errors — useful as a CI gate. `--html PATH` writes the shareable
-page outside the output directory.
+page outside the output directory. `--require-samples N` (default 3) sets how
+much evidence a winner claim needs before the report stops calling the ranking
+provisional. `modelbench run --fail-under 0.9` is the other half of a CI gate:
+it benchmarks, writes the report, then exits 1 if the final mean task score is
+below the bar.
 
 ## What is actually measured
 
@@ -451,6 +456,16 @@ modelbench run --target a --samples 3 --out runs/a
 modelbench run --target b --samples 3 --out runs/b
 modelbench report runs/a runs/b --strict
 ```
+
+**Three samples is the floor for a claim, and the report enforces it.** The noise
+figure is built from how far each task moved between its own samples; with two
+samples that is a range across two points, which can read 0 pp or 100 pp and is
+not an estimate of anything. So unless a pair of runs carries
+`--require-samples N` (default 3) samples per task, the report prints a
+**Provisional ranking** banner, retitles the per-task column `leader` instead of
+`winner`, and `summary.json` records `evidence.provisional: true`. Relax it with
+`--require-samples 2` when you only want a smoke comparison, or tighten it to 5
+for a publishable one.
 
 If the two runs come out within a point of each other, raise `--samples` or
 accept that the task suite cannot separate them. Do not lower the temperature

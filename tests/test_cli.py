@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
+from modelbench import cli
 from modelbench.cli import build_parser, main
 
 
@@ -161,3 +164,61 @@ def test_doctor_without_config_reports_failure(tmp_path: Path, monkeypatch, caps
     assert main(["doctor", "--no-probe"]) == 1
     out = capsys.readouterr().out
     assert "FAIL" in out
+
+
+def _fake_runner(score: float, write):
+    """A Runner stand-in that records a run instead of calling an endpoint."""
+
+    class Fake:
+        def __init__(self, plan):
+            self.plan = plan
+
+        def execute(self):
+            write(Path(self.plan.out_dir), score)
+            return SimpleNamespace(records=[{"task": "t01_weighted_jobs"}], errors=0)
+
+    return Fake
+
+
+def test_fail_under_gate_exits_nonzero_on_a_low_score(tmp_path: Path, monkeypatch, capsys, record):
+    config = tmp_path / "modelbench.toml"
+    config.write_text(CONFIG, encoding="utf-8")
+    out = tmp_path / "run"
+
+    def write(directory: Path, score: float) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        rows = [record("t01_weighted_jobs", 1, score, score >= 1.0)]
+        (directory / "results.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        (directory / "run.json").write_text(
+            json.dumps({"modelbench": "1.4.0", "target": {"name": "local"}, "suite": {"id": "core-v2"}})
+        )
+
+    monkeypatch.setattr(cli, "Runner", _fake_runner(0.5, write))
+    code = main(
+        ["run", "--config", str(config), "--target", "local", "--only", "t01_weighted_jobs",
+         "--no-report", "--out", str(out), "--fail-under", "0.9"]
+    )
+    assert code == 1
+    assert "FAIL" in capsys.readouterr().out
+
+
+def test_fail_under_gate_passes_above_the_bar(tmp_path: Path, monkeypatch, capsys, record):
+    config = tmp_path / "modelbench.toml"
+    config.write_text(CONFIG, encoding="utf-8")
+
+    def write(directory: Path, score: float) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        rows = [record("t01_weighted_jobs", 1, score, score >= 1.0)]
+        (directory / "results.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        (directory / "run.json").write_text(
+            json.dumps({"modelbench": "1.4.0", "target": {"name": "local"}, "suite": {"id": "core-v2"}})
+        )
+
+    monkeypatch.setattr(cli, "Runner", _fake_runner(1.0, write))
+    code = main(
+        ["run", "--config", str(config), "--target", "local", "--only", "t01_weighted_jobs",
+         "--no-report", "--out", str(tmp_path / "run2"), "--fail-under", "90"]
+    )
+    assert code == 0
+    printed = capsys.readouterr().out
+    assert "gate" in printed and "pass" in printed

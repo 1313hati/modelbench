@@ -318,6 +318,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     if outcome.errors:
         print(f"\nwarning: {outcome.errors} task(s) failed and were not recorded; see {out / 'errors.log'}")
         return 1
+    if args.fail_under is not None:
+        bar = args.fail_under / 100.0 if args.fail_under > 1 else args.fail_under
+        score = run_metrics(run)["final_score"]
+        passed = score >= bar
+        print(
+            f"gate     final mean task score {pct(score)} "
+            f"{'>=' if passed else '<'} {pct(bar)}  {'pass' if passed else 'FAIL'}"
+        )
+        if not passed:
+            return 1
     return 0
 
 
@@ -355,16 +365,21 @@ def cmd_report(args: argparse.Namespace) -> int:
         print("error: no run directories found", file=sys.stderr)
         return 2
     runs = load_runs(paths)
-    print(render_console(runs))
+    print(render_console(runs, require_samples=args.require_samples))
     notes = args.notes
     if args.notes_file:
         notes = Path(args.notes_file).read_text(encoding="utf-8")
     out = Path(args.out) if args.out else (paths[0] if len(paths) == 1 else Path("reports"))
     if args.json:
-        print(dump_json(render_json(runs, title=args.title)))
+        print(dump_json(render_json(runs, title=args.title, require_samples=args.require_samples)))
         return _strict_exit(runs) if args.strict else 0
     paths_written = write_reports(
-        runs, out, title=args.title, notes=notes, html=not args.no_html
+        runs,
+        out,
+        title=args.title,
+        notes=notes,
+        html=not args.no_html,
+        require_samples=args.require_samples,
     )
     print(f"\nreport   {paths_written['markdown']}")
     print(f"summary  {paths_written['json']}")
@@ -768,6 +783,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-html", action="store_true", help="do not write REPORT.html next to REPORT.md")
     p.add_argument("--html", default=None, help="also write the HTML report to this path")
     p.add_argument("--dry-run", action="store_true", help="print the plan and exit without calling the endpoint")
+    p.add_argument(
+        "--fail-under",
+        type=float,
+        default=None,
+        metavar="SCORE",
+        help="exit 1 if the mean final task score is below SCORE (0-1 or a percentage)",
+    )
     p.add_argument("--title", help="report title")
     p.add_argument("--notes", help="free-text notes appended to the report")
     p.set_defaults(func=cmd_run)
@@ -781,6 +803,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-html", action="store_true", help="skip the standalone HTML report")
     p.add_argument("--html", default=None, help="also write the HTML report to this path")
     p.add_argument("--strict", action="store_true", help="exit 1 if a run has missing, duplicated or failed records")
+    p.add_argument(
+        "--require-samples",
+        type=int,
+        default=3,
+        metavar="N",
+        help="samples per task needed before the report names a winner (default 3; 0 disables)",
+    )
     p.add_argument("--json", action="store_true", help="print the summary JSON instead of writing files")
     p.set_defaults(func=cmd_report)
 

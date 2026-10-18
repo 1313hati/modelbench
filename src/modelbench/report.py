@@ -44,6 +44,14 @@ class Run:
     records: list[dict]
 
     @property
+    def samples(self) -> int:
+        """Most samples any one task carries here (0 when the run is empty)."""
+        counts: dict[str, int] = {}
+        for record in self.records:
+            task = str(record.get("task"))
+            counts[task] = max(counts.get(task, 0), int(record.get("sample") or 1))
+        return max(counts.values()) if counts else 0
+    @property
     def tasks(self) -> list[str]:
         listed = (self.header.get("suite") or {}).get("tasks")
         if listed:
@@ -368,6 +376,13 @@ class Pairwise:
     # samples. A gap smaller than this is not evidence of anything.
     noise_pp: float = 0.0
     decisive: bool = True
+    # Fewest samples any one task carries in either run. The noise estimate is
+    # only as good as this number: two samples give a two-point range.
+    samples_min: int = 0
+
+    def provisional(self, require: int = 3) -> bool:
+        """True when the evidence is too thin to separate close models."""
+        return 0 < self.samples_min < require
 
 
 def task_spread_pp(run: "Run", task: str) -> float | None:
@@ -378,12 +393,18 @@ def task_spread_pp(run: "Run", task: str) -> float | None:
     return (max(scores) - min(scores)) * 100
 
 
+def samples_per_task(run: "Run", task: str) -> int:
+    return sum(1 for r in run.records if r.get("task") == task)
+
+
 def pairwise(a: Run, b: Run) -> Pairwise:
     ta, tb = per_task_metrics(a), per_task_metrics(b)
     common = sorted(set(ta) & set(tb))
     rows, wins_a, wins_b, ties = [], 0, 0, 0
     spreads: list[float] = []
+    counts: list[int] = []
     for task in common:
+        counts.append(min(samples_per_task(a, task), samples_per_task(b, task)))
         da, db = ta[task]["first"], tb[task]["first"]
         delta = (da - db) * 100
         noise = [x for x in (task_spread_pp(a, task), task_spread_pp(b, task)) if x is not None]
@@ -422,6 +443,7 @@ def pairwise(a: Run, b: Run) -> Pairwise:
         rows=rows,
         noise_pp=mean(spreads) if spreads else 0.0,
         decisive=abs(mean([r["delta_pp"] for r in rows]) if rows else 0.0) > (mean(spreads) if spreads else 0.0),
+        samples_min=min(counts) if counts else 0,
     )
 
 
@@ -483,6 +505,7 @@ def render_markdown(
     title: str | None = None,
     notes: str | None = None,
     generated: str | None = None,
+    require_samples: int = 3,
 ) -> str:
     metrics = [run_metrics(run) for run in runs]
     labels = [run.label for run in runs]
@@ -560,6 +583,29 @@ def render_markdown(
             "reading a winner into this.",
             "",
         ]
+    prov = [p for p in pairs if p.provisional(require_samples)]
+    if prov and len(runs) == 2:
+        pair_ = prov[0]
+        lines += [
+            f"**Provisional ranking — {pair_.samples_min} sample{'s' if pair_.samples_min != 1 else ''} "
+            "per task.** The noise figure above is measured from how far each task moves between "
+            f"its own samples; with only {pair_.samples_min} sample{'s' if pair_.samples_min != 1 else ''} "
+            "that is a range across "
+            f"{pair_.samples_min} point{'s' if pair_.samples_min != 1 else ''}, and it can read 0 pp or "
+            "very large — neither is an estimate. Run "
+            f"`--samples {require_samples}` (seed pinned) "
+            "before quoting this ranking; until then read the per-task column as a leader, not a "
+            "result.",
+            "",
+        ]
+    elif prov:
+        summary = ", ".join(f"{p.a} vs {p.b}: {p.samples_min}" for p in prov[:3])
+        lines += [
+            f"**Provisional ranking — some pairs carry fewer than {require_samples} samples per task** "
+            f"({summary}). Treat close calls in those columns as unresolved.",
+            "",
+        ]
+
     lines += [
         "## Headline",
         "",
@@ -579,9 +625,10 @@ def render_markdown(
     per_task = [per_task_metrics(run) for run in runs]
     all_tasks = sorted({task for metrics_by_task in per_task for task in metrics_by_task})
     lines += ["", "## Per task", ""]
+    word = "leader" if any(p.provisional(require_samples) for p in pairs) else "winner"
     if len(runs) == 2:
         lines += [
-            "| task | category | " + " | ".join(labels) + " | Δ (pp) | winner |",
+            "| task | category | " + " | ".join(labels) + f" | Δ (pp) | {word} |",
             "|---|---|" + "---|" * len(labels) + "---|---|",
         ]
         for task in all_tasks:
@@ -762,13 +809,14 @@ def render_markdown(
     return "\n".join(lines)
 
 
-def render_json(runs: Sequence[Run], title: str | None = None) -> dict:
+def render_json(runs: Sequence[Run], title: str | None = None, require_samples: int = 3) -> dict:
     payload = {
         "generated_at": now_iso(),
         "modelbench": __version__,
         "title": title or " vs ".join(run.label for run in runs),
         "runs": [],
         "pairwise": [],
+        "evidence": {},
     }
     for run in runs:
         payload["runs"].append(
@@ -795,9 +843,21 @@ def render_json(runs: Sequence[Run], title: str | None = None) -> dict:
                     "wins_b": pair.wins_b,
                     "ties": pair.ties,
                     "mean_delta_pp": round(pair.mean_delta_pp, 2),
+                    "noise_pp": round(pair.noise_pp, 2),
+                    "decisive": pair.decisive,
+                    "samples_per_task": pair.samples_min,
+                    "provisional": pair.provisional(require_samples),
                     "tasks": pair.rows,
                 }
             )
+    pairs = [pairwise(runs[i], runs[j]) for i in range(len(runs)) for j in range(i + 1, len(runs))]
+    payload["evidence"] = {
+        "samples_required": require_samples,
+        "samples_per_task": (
+            min(p.samples_min for p in pairs) if pairs else (runs[0].samples if runs else 0)
+        ),
+        "provisional": any(p.provisional(require_samples) for p in pairs),
+    }
     return payload
 
 
@@ -926,6 +986,7 @@ def render_html(
     title: str | None = None,
     notes: str | None = None,
     generated: str | None = None,
+    require_samples: int = 3,
 ) -> str:
     """A single self-contained page: no assets, no network, opens from disk."""
     metrics = [run_metrics(run) for run in runs]
@@ -937,6 +998,7 @@ def render_html(
     generated = generated or now_iso()
     best_index = max(range(len(runs)), key=lambda i: metrics[i]["first_score"]) if runs else 0
     pair = pairwise(runs[0], runs[1]) if len(runs) == 2 else None
+    pairs = [pairwise(runs[i], runs[j]) for i in range(len(runs)) for j in range(i + 1, len(runs))]
     parts: list[str] = []
 
     parts.append(
@@ -967,6 +1029,16 @@ def render_html(
             f"{_esc(detail)}. The sampler, not just the model, differs from column to column: "
             "a few points of the gap can come from temperature or an unpinned seed. Re-run both "
             "with identical settings before reading a winner into this.</div>"
+        )
+
+    if any(p.provisional(require_samples) for p in pairs):
+        thin = min(p.samples_min for p in pairs if p.samples_min) if pairs else 0
+        parts.append(
+            '<div class="warn"><b>Provisional ranking.</b> '
+            f"Only {thin} sample{'s' if thin != 1 else ''} per task: the noise figure is a "
+            f"range across {thin} point{'s' if thin != 1 else ''}, not an estimate. Run "
+            f"<code>--samples {require_samples}</code> (seed pinned) before quoting this ranking; "
+            "until then the per-task column names a leader, not a winner.</div>"
         )
 
     # -- cards ------------------------------------------------------------ #
@@ -1012,8 +1084,9 @@ def render_html(
     # -- per task --------------------------------------------------------- #
     all_tasks = sorted({task for metrics_by_task in per_task for task in metrics_by_task})
     head_cells = "".join(f'<th class="num" data-sort="num">{_esc(label)}</th>' for label in labels)
+    word = "leader" if any(p.provisional(require_samples) for p in pairs) else "winner"
     if len(runs) == 2:
-        head_cells += '<th class="num" data-sort="num">Δ pp</th><th>winner</th>'
+        head_cells += f'<th class="num" data-sort="num">Δ pp</th><th>{word}</th>'
     else:
         head_cells += "<th>best</th>"
     body = []
@@ -1232,7 +1305,7 @@ def render_html(
     return "\n".join(parts)
 
 
-def render_console(runs: Sequence[Run]) -> str:
+def render_console(runs: Sequence[Run], require_samples: int = 3) -> str:
     metrics = [run_metrics(run) for run in runs]
     rows = []
     for run, m in zip(runs, metrics):
@@ -1258,6 +1331,8 @@ def render_console(runs: Sequence[Run]) -> str:
         pair = pairwise(runs[0], runs[1])
         verdict = "within noise" if not pair.decisive else "beyond noise"
         noise = f" ±{pair.noise_pp:.1f} pp" if pair.noise_pp else ""
+        if pair.provisional(require_samples):
+            verdict += f", provisional at {pair.samples_min} sample(s)/task"
         lines.append(
             f"\ntask wins: {pair.a} {pair.wins_a}, {pair.b} {pair.wins_b}, ties {pair.ties} "
             f"(mean delta {_signed_pp(pair.mean_delta_pp)} pp · {verdict}{noise})"
@@ -1272,6 +1347,7 @@ def write_reports(
     notes: str | None = None,
     html: bool = True,
     html_name: str = "REPORT.html",
+    require_samples: int = 3,
 ) -> dict[str, Path | None]:
     """Write REPORT.md, summary.json and (by default) a standalone REPORT.html.
 
@@ -1280,15 +1356,18 @@ def write_reports(
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    markdown = render_markdown(runs, title=title, notes=notes)
+    markdown = render_markdown(runs, title=title, notes=notes, require_samples=require_samples)
     md_path = out / "REPORT.md"
     md_path.write_text(markdown, encoding="utf-8")
     json_path = out / "summary.json"
-    write_json(json_path, render_json(runs, title=title))
+    write_json(json_path, render_json(runs, title=title, require_samples=require_samples))
     html_path: Path | None = None
     if html:
         html_path = out / html_name
-        html_path.write_text(render_html(runs, title=title, notes=notes), encoding="utf-8")
+        html_path.write_text(
+            render_html(runs, title=title, notes=notes, require_samples=require_samples),
+            encoding="utf-8",
+        )
     return {"markdown": md_path, "json": json_path, "html": html_path}
 
 
