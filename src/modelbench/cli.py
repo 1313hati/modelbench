@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -22,6 +23,7 @@ from pathlib import Path
 from . import __version__
 from .client import ChatClient, probe
 from .config import Config, Generation, Target, find_config, target_from_cli
+from .explain import failing_records, load as load_explain, render_index, render_record
 from .errors import ModelBenchError, SuiteError, TaskError
 from .grader import grade, runner_available
 from .mockserver import start_mock
@@ -461,6 +463,38 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 # mock
 # --------------------------------------------------------------------------- #
+def cmd_inspect(args: argparse.Namespace) -> int:
+    run = load_explain(args.run)
+    if not args.task:
+        print(render_index(run))
+        return 0
+    record = next(
+        (r for r in run.records if r.get("task") == args.task
+         and (args.sample is None or int(r.get("sample") or 1) == args.sample)),
+        None,
+    )
+    if record is None:
+        from .errors import ModelBenchError
+
+        raise ModelBenchError(
+            f"{run.path}: no record for task {args.task!r}"
+            + (f" sample {args.sample}" if args.sample else "")
+        )
+    if args.json:
+        print(json.dumps(record, indent=2, ensure_ascii=False))
+        return 0
+    print(
+        render_record(
+            run,
+            record,
+            suite_spec=args.suite,
+            context=args.context,
+            full=args.full,
+        )
+    )
+    return 0
+
+
 def cmd_mock(args: argparse.Namespace) -> int:
     config = None
     try:
@@ -774,6 +808,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--keep", action="store_true", help="keep the temporary run directory")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_self_test)
+
+    p = sub.add_parser("inspect", help="show what the model wrote for one record, and why it failed")
+    p.add_argument("run", help="run directory (the one holding results.jsonl)")
+    p.add_argument("--task", help="task id; omit to list every record that lost points")
+    p.add_argument("--sample", type=int, default=None, help="sample number (default: the first)")
+    p.add_argument("--suite", default=None, help="suite path or id to diff against (default: the run's own suite)")
+    p.add_argument("--context", type=int, default=3, help="diff context lines")
+    p.add_argument("--full", action="store_true", help="print the whole answer, not the first 120 lines")
+    p.add_argument("--json", action="store_true", help="print the raw record as JSON")
+    p.set_defaults(func=cmd_inspect)
 
     p = sub.add_parser("init-suite", help="scaffold a new suite with one example task")
     p.add_argument("name")

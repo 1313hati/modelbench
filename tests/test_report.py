@@ -195,3 +195,36 @@ def test_unpinned_seed_is_called_out(run_dir, record):
     assert "not pinned" in md
     page = render_html([load_runs([run])[0]])
     assert "not pinned" in page
+
+
+def test_pairwise_knows_when_the_gap_is_noise(run_dir, record):
+    # Each run is internally noisy: t01 swings 40-60 pp between its own samples.
+    a = run_dir(
+        "a",
+        [record(task="t01", sample=1, score=1.0), record(task="t01", sample=2, score=0.6)],
+    )
+    b = run_dir(
+        "b",
+        [record(task="t01", sample=1, score=1.0), record(task="t01", sample=2, score=0.4)],
+    )
+    runs = load_runs([a, b])
+    pair = pairwise(runs[0], runs[1])
+    assert pair.noise_pp == 60.0  # widest of the two runs' spreads
+    assert pair.decisive is False
+    assert pair.rows[0]["within_noise"] is True
+    md = render_markdown(runs)
+    assert "The gap is inside the noise" in md
+    assert "≈" in md
+    assert 'class="warn"' in render_html(runs)
+    assert "within noise" in render_console(runs)
+
+
+def test_pairwise_is_decisive_when_samples_agree(run_dir, record):
+    a = run_dir("a", [record(task="t01", sample=1, score=1.0), record(task="t01", sample=2, score=1.0)])
+    b = run_dir("b", [record(task="t01", sample=1, score=0.2), record(task="t01", sample=2, score=0.2)])
+    runs = load_runs([a, b])
+    pair = pairwise(runs[0], runs[1])
+    assert pair.noise_pp == 0.0
+    assert pair.decisive is True
+    md = render_markdown(runs)
+    assert "inside the noise" not in md

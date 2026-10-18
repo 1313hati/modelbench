@@ -201,9 +201,16 @@ class ChatClient:
                     raise TargetUnavailable(
                         f"{self.target.name}: giving up after {attempt} attempts: {exc}"
                     ) from exc
+                # Prefer the server's own advice: a 429 with Retry-After: 12
+                # means 12 seconds, not our 1-2-4 guess.
+                hinted = getattr(exc, "retry_after", None)
+                pause = max(delay, hinted) if hinted else delay
+                pause = min(pause, 120.0)
                 if self.on_event:
-                    self.on_event(f"retry {attempt}/{self.target.max_retries} after {exc}; sleeping {delay:.0f}s")
-                time.sleep(delay)
+                    self.on_event(
+                        f"retry {attempt}/{self.target.max_retries} after {exc}; sleeping {pause:.0f}s"
+                    )
+                time.sleep(pause)
                 delay = min(delay * 2, 30.0)
         if raw_path is not None:
             result.write_raw(raw_path)
@@ -229,7 +236,7 @@ class ChatClient:
             body = exc.read().decode("utf-8", "replace")[:2000]
             message = f"HTTP {exc.code} from {self.target.url}: {body}"
             if exc.code in RETRY_STATUS:
-                raise _Retryable(message) from None
+                raise _Retryable(message, retry_after=_retry_after(exc)) from None
             raise TargetUnavailable(message) from None
         except (urllib.error.URLError, ConnectionError, socket.timeout, http.client.HTTPException, OSError) as exc:
             raise _Retryable(f"{type(exc).__name__}: {exc}") from None
@@ -345,7 +352,23 @@ class ChatClient:
 
 
 class _Retryable(Exception):
-    """Internal marker for transient failures."""
+    """Internal marker for transient failures, with an optional server hint."""
+
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def _retry_after(exc: urllib.error.HTTPError) -> float | None:
+    """Honour Retry-After when a server sends it; ignore nonsense values."""
+    raw = (exc.headers.get("retry-after") or "").strip() if exc.headers else ""
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None  # HTTP-date form: not worth guessing a clock skew
+    return value if 0 < value <= 120 else None
 
 
 def probe(target: Target) -> dict[str, Any]:

@@ -364,15 +364,32 @@ class Pairwise:
     ties: int
     mean_delta_pp: float
     rows: list[dict]
+    # Run-to-run noise: how much a task's own score moves between independent
+    # samples. A gap smaller than this is not evidence of anything.
+    noise_pp: float = 0.0
+    decisive: bool = True
+
+
+def task_spread_pp(run: "Run", task: str) -> float | None:
+    """How far this task's score moved between samples, in pp (None if 1 sample)."""
+    scores = [float(r["first"]["score"]) for r in run.records if r.get("task") == task]
+    if len(scores) < 2:
+        return None
+    return (max(scores) - min(scores)) * 100
 
 
 def pairwise(a: Run, b: Run) -> Pairwise:
     ta, tb = per_task_metrics(a), per_task_metrics(b)
     common = sorted(set(ta) & set(tb))
     rows, wins_a, wins_b, ties = [], 0, 0, 0
+    spreads: list[float] = []
     for task in common:
         da, db = ta[task]["first"], tb[task]["first"]
         delta = (da - db) * 100
+        noise = [x for x in (task_spread_pp(a, task), task_spread_pp(b, task)) if x is not None]
+        task_noise = max(noise) if noise else None
+        if task_noise is not None:
+            spreads.append(task_noise)
         if abs(delta) < 0.05:
             winner = "tie"
             ties += 1
@@ -390,6 +407,8 @@ def pairwise(a: Run, b: Run) -> Pairwise:
                 "b": db,
                 "delta_pp": delta,
                 "winner": winner,
+                "noise_pp": task_noise,
+                "within_noise": task_noise is not None and task_noise > 0 and abs(delta) <= task_noise,
             }
         )
     return Pairwise(
@@ -401,6 +420,8 @@ def pairwise(a: Run, b: Run) -> Pairwise:
         ties=ties,
         mean_delta_pp=mean([r["delta_pp"] for r in rows]) if rows else 0.0,
         rows=rows,
+        noise_pp=mean(spreads) if spreads else 0.0,
+        decisive=abs(mean([r["delta_pp"] for r in rows]) if rows else 0.0) > (mean(spreads) if spreads else 0.0),
     )
 
 
@@ -502,6 +523,25 @@ def render_markdown(
         else:
             line += "."
         lines += [line, ""]
+        if pair and len(runs) == 2 and pair.noise_pp > 0:
+            sign = 1 if pair.a == labels[lead[0]] else -1
+            gap = pair.mean_delta_pp * sign
+            if pair.decisive:
+                lines += [
+                    f"Gap: **{_signed_pp(gap)} pp** mean per-task, against "
+                    f"**±{pair.noise_pp:.1f} pp** of run-to-run noise (the same task's score "
+                    "moving between samples).",
+                    "",
+                ]
+            else:
+                lines += [
+                    f"**The gap is inside the noise.** Mean per-task difference is "
+                    f"{_signed_pp(gap)} pp, and the same tasks move by ±{pair.noise_pp:.1f} pp "
+                    "between samples of one run. At this sample size the suite cannot separate "
+                    "these two; raise `--samples` (and keep the seed pinned) before quoting a "
+                    "winner.",
+                    "",
+                ]
 
     lines += [
         f"_Generated {generated or now_iso()} by modelbench {__version__}. "
@@ -556,6 +596,10 @@ def render_markdown(
                 d = (values[0] - values[1]) * 100
                 delta = _signed_pp(d)
                 winner = "tie" if abs(d) < 0.05 else (labels[0] if d > 0 else labels[1])
+                row = next((r for r in pairs[0].rows if r["task"] == task), None) if pairs else None
+                if row and row.get("within_noise"):
+                    delta = "≈" + delta
+                    winner += " (within noise)"
             category = next((m[task]["category"] for m in per_task if task in m), "")
             lines.append(f"| {task} | {category} | " + " | ".join(cells) + f" | {delta} | {winner} |")
         if pairs:
@@ -565,6 +609,12 @@ def render_markdown(
                 f"Task wins: **{pair.a} {pair.wins_a}**, **{pair.b} {pair.wins_b}**, {pair.ties} ties. "
                 f"Mean per-task delta: {_signed_pp(pair.mean_delta_pp)} pp.",
             ]
+            if any(row.get("within_noise") for row in pair.rows):
+                lines += [
+                    "",
+                    "`≈` marks a delta smaller than how much that task moved between samples of "
+                    "one run — a coin flip, not a result.",
+                ]
     else:
         lines += ["| task | category | " + " | ".join(labels) + " | best |", "|---|---|" + "---|" * len(labels) + "---|"]
         for task in all_tasks:
@@ -978,9 +1028,15 @@ def render_html(
             else:
                 delta = (left - right) * 100
                 winner = "tie" if abs(delta) < 0.05 else (labels[0] if delta > 0 else labels[1])
+                row = next((r for r in pair.rows if r["task"] == task), None) if pair else None
+                faint = row is not None and row.get("within_noise")
+                shown = ("≈" + _signed_pp(delta)) if faint else _signed_pp(delta)
+                tooltip = f' title="±{row["noise_pp"]:.1f} pp between samples"' if faint else ""
+                winner_cell = _esc(winner) + ('<span class="sub">within noise</span>' if faint else "")
                 tail = (
-                    f'<td class="num" data-value="{delta:.2f}">{_signed_pp(delta)}</td>'
-                    f"<td>{_esc(winner)}</td>"
+                    f'<td class="num{" muted" if faint else ""}" data-value="{delta:.2f}"{tooltip}>'
+                    f"{shown}</td>"
+                    f"<td>{winner_cell}</td>"
                 )
         else:
             known = [v for v in values if v is not None]
@@ -997,6 +1053,20 @@ def render_html(
             f"<b>{_esc(pair.b)} {pair.wins_b}</b>, {pair.ties} tie(s) · mean per-task delta "
             f"{_signed_pp(pair.mean_delta_pp)} pp.</p>"
         )
+        if pair.noise_pp > 0:
+            if pair.decisive:
+                note += (
+                    f'<p class="sub">The mean gap is larger than the ±{pair.noise_pp:.1f} pp a '
+                    "task moves between samples of one run.</p>"
+                )
+            else:
+                note = (
+                    '<div class="warn"><b>The gap is inside the noise.</b> '
+                    f"Mean per-task difference is {_signed_pp(pair.mean_delta_pp)} pp while the "
+                    f"same tasks move by ±{pair.noise_pp:.1f} pp between samples of one run. "
+                    "At this sample size the suite cannot separate these two — raise "
+                    "<code>--samples</code> (seed pinned) before quoting a winner.</div>"
+                ) + note
     parts.append(
         '<section><h2>Per task</h2>'
         f"{note}<table class=\"sortable\"><thead><tr><th data-sort=\"text\">task</th>"
@@ -1186,9 +1256,11 @@ def render_console(runs: Sequence[Run]) -> str:
     lines = [table]
     if len(runs) == 2:
         pair = pairwise(runs[0], runs[1])
+        verdict = "within noise" if not pair.decisive else "beyond noise"
+        noise = f" ±{pair.noise_pp:.1f} pp" if pair.noise_pp else ""
         lines.append(
             f"\ntask wins: {pair.a} {pair.wins_a}, {pair.b} {pair.wins_b}, ties {pair.ties} "
-            f"(mean delta {_signed_pp(pair.mean_delta_pp)} pp)"
+            f"(mean delta {_signed_pp(pair.mean_delta_pp)} pp · {verdict}{noise})"
         )
     return "\n".join(lines)
 

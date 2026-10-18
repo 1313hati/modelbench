@@ -65,6 +65,7 @@ the difference is the model, not the harness.
 - [Beyond coding](#beyond-coding)
 - [Reading a report](#reading-a-report)
 - [Seeds, pins and drift](#seeds-pins-and-drift)
+- [Why did it fail?](#why-did-it-fail)
 - [Write your own suite](#write-your-own-suite)
 - [Check the harness without a model](#check-the-harness-without-a-model)
 - [Fairness checklist](#fairness-checklist)
@@ -184,6 +185,7 @@ key. `[project]` sets the default `suite` and extra `suite_paths`.
 | `modelbench doctor` | check config, suite, grader runtimes and endpoint reachability |
 | `modelbench run` | benchmark one target |
 | `modelbench report` | aggregate runs into `REPORT.md`, `REPORT.html` + `summary.json` |
+| `modelbench inspect` | what the model actually wrote for one record, and the diff against the reference |
 | `modelbench validate` | prove every reference solution still scores 100% |
 | `modelbench self-test` | end-to-end run against a mock model, no GPU needed |
 | `modelbench mock` | serve reference answers from a fake OpenAI endpoint |
@@ -434,8 +436,12 @@ What the report does with this:
 - **Sample stability** compares the samples of each task, so a model that is
   noisy on its own shows up as noisy rather than as "89%";
 - **Comparing runs sampled differently** puts a warning above the fold naming
-  the fields that differ (`temperature: 0.2 vs 1`, `seed: 42 vs not set`) and
-  tells you to re-run before reading a winner into it.
+  the fields that differ (`temperature: 0.2 vs 1.0`, `seed: 42 vs not set`) and
+  tells you to re-run before reading a winner into it;
+- **A gap smaller than the noise is reported as noise.** The comparison measures
+  how far each task moved between its own samples and, if the mean delta is
+  inside that, says so instead of naming a winner — a per-task `≈` marks the
+  individual flips.
 
 A practical protocol for a comparison you intend to publish:
 
@@ -455,6 +461,64 @@ a warm cache and greedy-ish sampling (`top_k` small, `temperature` low) is close
 to deterministic; many hosted providers ignore `seed` entirely or only promise
 "best effort". The sample-stability rows are how you find out which kind you are
 talking to before you publish anything.
+
+## Why did it fail?
+
+A report tells you which task lost points. `inspect` tells you why, without
+opening JSON by hand:
+
+```bash
+modelbench inspect runs/local-27b-core-v2      # triage: what lost points
+modelbench inspect runs/local-27b-core-v2 --task t03_json_parser --sample 2
+```
+
+The triage view lists every record that scored below full marks, worst first,
+with the first failing assertion:
+
+```
+# first line: <label> <path>, then how many records lost nothing
+task                     s  score    first failing assertion
+------------------------------------------------------------
+t03_json_parser          1   24/31  FAIL rejects_trailing_comma: expected ValueError, got dict
+t07_streaming_parser     2    0/31  <no RESULT line>: ModuleNotFoundError: No module named 'sol'
+…                                   # worst first, up to 40 rows
+```
+
+One record in full gives you the prompt's title, the seed, the finish reason,
+the failing assertions, what the model actually wrote, and a unified diff
+against the task's reference solution:
+
+```
+t03_json_parser  sample 2  [Lenient JSON parser]
+run      runs/local-27b-core-v2  (local-27b-core-v2, suite core-v2)
+kind     file / py   category parsing
+seed     43   served id Qwen3.8-27B
+score    24/31 first   final 100.0% (solved)
+call     finish=stop  tokens=…  ttft=…s  total=…s  source=fence
+
+first attempt — failing assertions:
+  FAIL rejects_trailing_comma: expected ValueError, got dict
+
+what the model wrote (runs/local-27b-core-v2/s2/sol):
+--------------------------------------------------------------------
+def parse(text):
+    …
+--------------------------------------------------------------------
+
+diff against the reference (src/modelbench/suites/core-v2/tasks/t03_json_parser/ref):
+--------------------------------------------------------------------
+--- reference
++++ model
+@@ -14,7 +14,7 @@
+-    if text.rstrip().endswith(","):
+-        raise ValueError("trailing comma")
++    # trailing commas are tolerated
+```
+
+That last block is the point: a diff is faster to read than a score. `--context`
+controls how much surrounding code you get, `--full` prints the whole answer,
+`--json` drops the formatted view for the raw record, and `--suite PATH` points
+at a suite that is not in this installation.
 
 ## Write your own suite
 

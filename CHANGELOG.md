@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.3.0
+
+- `modelbench inspect RUN` triages a finished run: every record that lost points,
+  worst first, with its first failing assertion. `--task`/`--sample` shows one
+  record in full — failing assertions, what the model actually wrote, and a
+  unified diff against the task's reference solution. `--context`, `--full`,
+  `--json`, `--suite`.
+- Comparisons are noise-aware. `pairwise()` measures how far each task moved
+  between its own samples; if the mean delta is inside that spread the report
+  says "the gap is inside the noise" instead of naming a winner, and marks
+  individual coin-flip tasks with `≈`. Console output ends with
+  "within noise" or "beyond noise".
+- 429/503 responses now honour `Retry-After` (capped at 120 s) instead of
+  sleeping through the fixed 1-2-4-8 backoff. HTTP-date values and nonsense
+  numbers are ignored rather than trusted.
+- Grader crashes are labelled as such: a record whose grader never reached
+  `RESULT` shows "the grader never reached a RESULT line" rather than passing
+  a traceback off as a failing assertion.
+- README: "Why did it fail?" section; 66 -> 74 tests.
+
 ## 1.2.0
 
 - Sampling is pinned by default: `seed = 42`, and sample *n* of a task is sent
