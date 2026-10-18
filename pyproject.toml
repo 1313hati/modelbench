@@ -59,9 +59,14 @@ modelbench = [
   "suites/*/prompt.md",
   "suites/*/tasks/*/meta.json",
   "suites/*/tasks/*/task.md",
+  "suites/*/tasks/*/*.py",
+  "suites/*/tasks/*/*.js",
+  "suites/*/tasks/*/*.sql",
+  "suites/*/tasks/*/*.sh",
   "suites/*/tasks/*/tests/*",
   "suites/*/tasks/*/ref/*",
   "suites/*/tasks/*/ref/**/*",
+  "suites/*/tasks/*/files/*",
   "suites/*/tasks/*/files/**/*",
 ]
 

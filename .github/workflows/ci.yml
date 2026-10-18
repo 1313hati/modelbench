@@ -58,20 +58,21 @@ jobs:
           python-version: "3.12"
       - run: pip install build
       - run: python -m build
-      - name: Check the wheel ships tasks and tests
+      - name: Check the wheel ships every task file
         run: |
           python - <<'PY'
-          import glob, zipfile
+          import glob, pathlib, zipfile
+
           wheel = glob.glob("dist/*.whl")[0]
-          names = zipfile.ZipFile(wheel).namelist()
-          required = [
-              "modelbench/suites/core-v2/suite.toml",
-              "modelbench/suites/core-v2/tasks/t01_weighted_jobs/task.md",
-              "modelbench/suites/core-v2/tasks/t06_repo_bugfix/tests/test_repo.py",
-              "modelbench/suites/core-v1/tasks/t9_map_limit/ref/t9.js",
-              "modelbench/tasklib/harness.py",
-          ]
-          missing = [name for name in required if not any(n.endswith(name) for n in names)]
-          print(f"{len(names)} files in {wheel}")
-          assert not missing, f"missing from wheel: {missing}"
+          names = set(zipfile.ZipFile(wheel).namelist())
+
+          root = pathlib.Path("src/modelbench")
+          expected = {
+              f"modelbench/{p.relative_to(root).as_posix()}"
+              for p in root.rglob("*")
+              if p.is_file() and "__pycache__" not in p.parts and not p.name.endswith(".pyc")
+          }
+          missing = sorted(name for name in expected if name not in names)
+          print(f"{len(names)} files in {wheel}; {len(expected)} package files expected")
+          assert not missing, f"missing from wheel ({len(missing)}): {missing[:20]}"
           PY

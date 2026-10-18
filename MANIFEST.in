@@ -1,0 +1,8 @@
+recursive-include src/modelbench/suites *
+recursive-include src/modelbench/tasklib *.py
+recursive-include tests *.py
+include LICENSE
+include README.md
+include CHANGELOG.md
+include CONTRIBUTING.md
+include modelbench.example.toml
