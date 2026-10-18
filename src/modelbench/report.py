@@ -465,6 +465,7 @@ def headline_rows(runs: Sequence[Run], metrics: Sequence[dict]) -> list[tuple[st
     """The headline table, shared by the markdown and HTML reports."""
     return [
         ("records / expected", [f"{m['records']} / {m['expected']}" for m in metrics]),
+        ("samples / task", [str(run.samples) for run in runs]),
         ("mean task score, first", [pct(m["first_score"]) for m in metrics]),
         ("mean task score, final", [pct(m["final_score"]) for m in metrics]),
         (

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "modelbench"
-version = "1.4.0"
+version = "1.4.1"
 description = "A local AI benchmark for coding and more — grade any OpenAI-compatible model against reproducible task suites"
 readme = "README.md"
 requires-python = ">=3.11"

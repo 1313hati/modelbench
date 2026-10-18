@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.1
+
+- The headline table states `samples / task`. A report read out of context should
+  not leave you guessing how many draws each mean is built from — it is the
+  number that decides whether any of the deltas mean anything.
+
 ## 1.4.0
 
 - **A provisional ranking is not a ranking.** `Pairwise.samples_min` records the

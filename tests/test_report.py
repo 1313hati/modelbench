@@ -262,3 +262,11 @@ def test_summary_json_carries_the_evidence_level(run_dir, record):
     assert payload["pairwise"][0]["provisional"] is True
     kept = render_json(load_runs([a, b]), require_samples=1)
     assert kept["evidence"]["provisional"] is False
+
+
+def test_headline_states_the_sample_count(run_dir, record):
+    a = run_dir("a", [record(task="t01", sample=1, score=1.0), record(task="t01", sample=2, score=1.0)])
+    b = run_dir("b", [record(task="t01", sample=1, score=0.5)])
+    md = render_markdown(load_runs([a, b]))
+    assert "samples / task" in md
+    assert "| samples / task | 2 | 1 |" in md
