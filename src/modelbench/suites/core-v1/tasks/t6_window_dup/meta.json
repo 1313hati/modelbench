@@ -1,0 +1,10 @@
+{
+  "id": "t6_window_dup",
+  "kind": "file",
+  "lang": "py",
+  "max_tokens": 4096,
+  "timeout": 120,
+  "category": "algorithms",
+  "checks": 12,
+  "title": "Detect duplicates in a sliding window"
+}

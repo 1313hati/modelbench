@@ -1,0 +1,10 @@
+{
+  "id": "t1_bugfix_merge",
+  "kind": "file",
+  "lang": "py",
+  "max_tokens": 4096,
+  "timeout": 120,
+  "category": "debugging",
+  "checks": 10,
+  "title": "Fix merge_intervals so it merges touching ranges"
+}

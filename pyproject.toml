@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modelbench"
+version = "1.0.0"
+description = "A local AI benchmark for coding and more — grade any OpenAI-compatible model against reproducible task suites"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Valentyn Paziuk" }]
+keywords = [
+  "benchmark",
+  "local-llm",
+  "llm",
+  "evaluation",
+  "coding",
+  "llama.cpp",
+  "vllm",
+  "ollama",
+  "openai",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Testing",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "build>=1"]
+
+[project.scripts]
+modelbench = "modelbench.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/1313hati/modelbench"
+Issues = "https://github.com/1313hati/modelbench/issues"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
+zip-safe = false
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+modelbench = [
+  "tasklib/*.py",
+  "suites/*/suite.toml",
+  "suites/*/prompt.md",
+  "suites/*/tasks/*/meta.json",
+  "suites/*/tasks/*/task.md",
+  "suites/*/tasks/*/tests/*",
+  "suites/*/tasks/*/ref/*",
+  "suites/*/tasks/*/ref/**/*",
+  "suites/*/tasks/*/files/**/*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

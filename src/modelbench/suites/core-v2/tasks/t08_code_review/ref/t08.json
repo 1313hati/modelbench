@@ -1,0 +1,9 @@
+[
+  {"file": "accounts.py", "line": 22, "severity": "high", "issue": "Mutable default list is shared across all calls and grows without bound."},
+  {"file": "pricing.py", "line": 9, "severity": "high", "issue": "Identity comparison against a string literal can silently fail; use ==."},
+  {"file": "pricing.py", "line": 15, "severity": "high", "issue": "Tax is computed on the original price instead of the discounted price."},
+  {"file": "files.py", "line": 4, "severity": "medium", "issue": "File handle is never closed; use a with block."},
+  {"file": "cache.py", "line": 11, "severity": "medium", "issue": "A full cache is cleared entirely instead of evicting an entry."},
+  {"file": "retry.py", "line": 7, "severity": "high", "issue": "The caught exception is discarded, so raise last raises None and loses the error."},
+  {"file": "lock.py", "line": 10, "severity": "high", "issue": "Read-modify-write is not protected by the lock, so increments race."}
+]

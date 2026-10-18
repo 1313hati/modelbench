@@ -1,0 +1,10 @@
+{
+  "id": "t2_parse_duration",
+  "kind": "file",
+  "lang": "py",
+  "max_tokens": 4096,
+  "timeout": 120,
+  "category": "parsing",
+  "checks": 22,
+  "title": "Parse human durations into seconds"
+}

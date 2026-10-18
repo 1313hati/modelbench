@@ -1,0 +1,10 @@
+{
+  "id": "t03_json_parser",
+  "lang": "py",
+  "kind": "file",
+  "category": "parsing",
+  "timeout": 120,
+  "max_tokens": 8192,
+  "checks": 47,
+  "title": "A JSON parser built from scratch"
+}

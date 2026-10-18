@@ -1,0 +1,10 @@
+{
+  "id": "t06_repo_bugfix",
+  "lang": "py",
+  "kind": "repo",
+  "category": "repo",
+  "timeout": 180,
+  "max_tokens": 10240,
+  "checks": 25,
+  "title": "Fix a failing multi-file reservations repo"
+}

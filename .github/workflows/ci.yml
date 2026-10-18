@@ -1,0 +1,77 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: pytest (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Unit tests
+        run: pytest
+
+  harness:
+    name: suites and self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Every reference solution must score 100%
+        run: |
+          modelbench validate --suite core-v1
+          modelbench validate --suite core-v2
+      - name: End-to-end run against the mock model
+        run: |
+          modelbench self-test --suite core-v1
+          modelbench self-test --suite core-v2
+
+  package:
+    name: wheel contains the suites
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build
+      - name: Check the wheel ships tasks and tests
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          required = [
+              "modelbench/suites/core-v2/suite.toml",
+              "modelbench/suites/core-v2/tasks/t01_weighted_jobs/task.md",
+              "modelbench/suites/core-v2/tasks/t06_repo_bugfix/tests/test_repo.py",
+              "modelbench/suites/core-v1/tasks/t9_map_limit/ref/t9.js",
+              "modelbench/tasklib/harness.py",
+          ]
+          missing = [name for name in required if not any(n.endswith(name) for n in names)]
+          print(f"{len(names)} files in {wheel}")
+          assert not missing, f"missing from wheel: {missing}"
+          PY

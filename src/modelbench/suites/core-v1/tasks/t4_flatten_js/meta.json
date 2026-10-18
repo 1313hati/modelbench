@@ -1,0 +1,10 @@
+{
+  "id": "t4_flatten_js",
+  "kind": "file",
+  "lang": "js",
+  "max_tokens": 4096,
+  "timeout": 120,
+  "category": "algorithms",
+  "checks": 11,
+  "title": "Flatten nested arrays/objects in JavaScript"
+}

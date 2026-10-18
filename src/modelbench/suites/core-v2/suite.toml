@@ -1,0 +1,4 @@
+id = "core-v2"
+name = "Core coding suite v2"
+version = "2.0"
+description = "Twelve harder tasks with 296 hidden assertions: exact specifications, parsers, SQL, a binary protocol, concurrency, code review, and multi-file repository edits. One equal-weight score per task."

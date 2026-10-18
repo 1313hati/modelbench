@@ -1,0 +1,27 @@
+
+  █   █   ███   ████   █████  █      ████   █████  █   █   ████  █   █
+  ██ ██  █   █  █   █  █      █      █   █  █      ██  █  █      █   █
+  █ █ █  █   █  █   █  █      █      █   █  █      █ █ █  █      █   █
+  █ █ █  █   █  █   █  ████   █      ████   ████   █  ██  █      █████
+  █   █  █   █  █   █  █      █      █   █  █      █   █  █      █   █
+  █   █  █   █  █   █  █      █      █   █  █      █   █  █      █   █
+  █   █   ███   ████   █████  █████  ████   █████  █   █   ████  █   █
+
+  a local AI benchmark for coding and more
+  llama.cpp · vLLM · Ollama · any OpenAI-compatible endpoint
+
+  ┌─ modelbench ───────────────────────────────────────────────┐
+  │ $ modelbench run --target local --samples 2                │
+  │                                                            │
+  │ suite   core-v2 · 12 tasks · 296 hidden assertions         │
+  │ target  local-27b @ 127.0.0.1:8080/v1                      │
+  │                                                            │
+  │ [ 09/24] t07_thread_queue   s1  23/23 100.0%   41.2s       │
+  │ [ 10/24] t08_code_review    s1  14/14 100.0%   22.7s       │
+  │ [ 11/24] t09_csv_rfc4180    s1  33/33 100.0%   35.0s       │
+  │                                                            │
+  │ run complete · 24 records · 18m04s · REPORT.md written     │
+  └────────────────────────────────────────────────────────────┘
+
+  install  pipx install modelbench
+  source   github.com/1313hati/modelbench

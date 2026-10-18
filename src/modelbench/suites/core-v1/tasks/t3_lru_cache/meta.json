@@ -1,0 +1,10 @@
+{
+  "id": "t3_lru_cache",
+  "kind": "file",
+  "lang": "py",
+  "max_tokens": 4096,
+  "timeout": 120,
+  "category": "data-structures",
+  "checks": 8,
+  "title": "LRU cache with O(1) get/put"
+}

@@ -1,0 +1,10 @@
+{
+  "id": "t05_async_pool",
+  "lang": "js",
+  "kind": "js",
+  "category": "async",
+  "timeout": 120,
+  "max_tokens": 8192,
+  "checks": 12,
+  "title": "Bounded-concurrency async map with retries (JS)"
+}

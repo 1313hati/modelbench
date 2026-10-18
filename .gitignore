@@ -1,0 +1,30 @@
+# local configuration (may contain endpoints, keys, absolute paths)
+modelbench.toml
+*.local.toml
+
+# results and run artefacts
+runs/
+results/
+reports/
+*.raw.txt
+errors.log
+run.log
+server.log
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# editors / os
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,10 @@
+{
+  "id": "t11_varint_protocol",
+  "lang": "py",
+  "kind": "file",
+  "category": "binary",
+  "timeout": 120,
+  "max_tokens": 8192,
+  "checks": 32,
+  "title": "Implement a zig-zag varint binary format"
+}

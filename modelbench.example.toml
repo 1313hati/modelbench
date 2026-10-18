@@ -1,0 +1,94 @@
+# modelbench — example configuration
+#
+# Copy this file to modelbench.toml (git-ignored) and keep the targets you
+# actually have.  Every setting below is optional except base_url and model.
+#
+# Resolution order for the config file:
+#   1. --config PATH
+#   2. $MODELBENCH_CONFIG
+#   3. ./modelbench.toml, ./modelbench.local.toml
+#   4. ~/.config/modelbench/modelbench.toml
+#
+# Values may reference environment variables: ${OPENAI_API_KEY},
+# ${VLLM_HOST:-127.0.0.1}.  Keep secrets out of this file.
+
+[project]
+# Suite used when --suite is not given.
+suite = "core-v2"
+
+# Extra directories that contain suites (each one holding suite.toml).
+# Relative paths resolve against this file's directory.
+suite_paths = ["suites"]
+
+
+[defaults]
+# Sampling is part of the benchmark protocol: use the SAME values for every
+# model you intend to compare, otherwise the numbers are not comparable.
+temperature = 1.0
+top_p = 0.95
+max_tokens = 8192     # fallback cap for tasks that do not set their own
+retry_cap = 16384     # cap for the single retry after finish_reason=length
+samples = 2           # independent samples per task
+repair = true         # offer one feedback turn with the failing assertions
+
+
+# --------------------------------------------------------------------------- #
+# llama.cpp / llama-server (local GGUF)
+# --------------------------------------------------------------------------- #
+[targets.local]
+base_url = "http://127.0.0.1:8080/v1"
+model = "local"                 # any id; llama-server ignores it
+top_k = 20                      # llama.cpp-only sampling knobs
+min_p = 0.0
+timeout_s = 1800
+
+# Optional: let modelbench start and stop the server itself (shell commands,
+# run through /bin/sh with {port} substituted).  The log goes to server.log
+# inside the run directory, and the client waits for /health before starting.
+# start_cmd = "llama-server -m /models/qwen2.5-coder-7b-q4_k_m.gguf --port {port} --ctx-size 32768"
+# stop_cmd  = "pkill -f llama-server"
+
+
+# --------------------------------------------------------------------------- #
+# vLLM (OpenAI-compatible server)
+# --------------------------------------------------------------------------- #
+[targets.vllm]
+base_url = "http://127.0.0.1:8000/v1"
+model = "Qwen/Qwen2.5-Coder-7B-Instruct"
+api_key_env = "VLLM_API_KEY"    # optional; leave out for servers without auth
+timeout_s = 900
+
+
+# --------------------------------------------------------------------------- #
+# Ollama (OpenAI-compatible endpoint)
+# --------------------------------------------------------------------------- #
+[targets.ollama]
+base_url = "http://127.0.0.1:11434/v1"
+model = "qwen2.5-coder:7b"
+
+
+# --------------------------------------------------------------------------- #
+# A hosted OpenAI-compatible API
+# --------------------------------------------------------------------------- #
+[targets.openai]
+base_url = "https://api.openai.com/v1"
+model = "gpt-4.1-mini"
+api_key_env = "OPENAI_API_KEY"
+temperature = 0.2               # per-target override of [defaults]
+connect_timeout_s = 15
+max_retries = 3
+
+# Hosted providers reject unknown sampling keys, so leave top_k/min_p unset.
+# Extra JSON merged into every request body (provider-specific knobs):
+# [targets.openai.extra_body]
+# reasoning_effort = "medium"
+
+
+# --------------------------------------------------------------------------- #
+# A second local model, compared against the first
+# --------------------------------------------------------------------------- #
+# [targets.local-small]
+# base_url = "http://127.0.0.1:8081/v1"
+# model = "local-small"
+#
+# Then:  modelbench report runs/local-* runs/local-small-*

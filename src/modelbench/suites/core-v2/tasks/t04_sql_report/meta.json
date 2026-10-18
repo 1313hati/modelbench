@@ -1,0 +1,10 @@
+{
+  "id": "t04_sql_report",
+  "lang": "sql",
+  "kind": "sql",
+  "category": "sql",
+  "timeout": 120,
+  "max_tokens": 6144,
+  "checks": 42,
+  "title": "One SQLite query: a sales report"
+}

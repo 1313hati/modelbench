@@ -1,0 +1,10 @@
+{
+  "id": "t7_parse_query",
+  "kind": "file",
+  "lang": "py",
+  "max_tokens": 4096,
+  "timeout": 120,
+  "category": "parsing",
+  "checks": 17,
+  "title": "Parse a URL query string into a nested structure"
+}

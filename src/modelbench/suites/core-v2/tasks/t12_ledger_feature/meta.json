@@ -1,0 +1,10 @@
+{
+  "id": "t12_ledger_feature",
+  "lang": "py",
+  "kind": "repo",
+  "category": "longcontext",
+  "timeout": 180,
+  "max_tokens": 10240,
+  "checks": 25,
+  "title": "Add two missing features to a ledger repo"
+}

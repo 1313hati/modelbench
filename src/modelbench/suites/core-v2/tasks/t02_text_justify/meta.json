@@ -1,0 +1,10 @@
+{
+  "id": "t02_text_justify",
+  "lang": "py",
+  "kind": "file",
+  "category": "spec",
+  "timeout": 120,
+  "max_tokens": 6144,
+  "checks": 18,
+  "title": "Full text justification to a fixed width"
+}

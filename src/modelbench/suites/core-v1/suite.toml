@@ -1,0 +1,4 @@
+id = "core-v1"
+name = "Core coding suite v1"
+version = "1.0"
+description = "Nine short, self-contained tasks (algorithms, parsing, concurrency, async JS). Strong models saturate this suite, which makes it a fast smoke test rather than a discriminator."

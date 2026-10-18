@@ -1,0 +1,10 @@
+{
+  "id": "t9_map_limit",
+  "kind": "file",
+  "lang": "js",
+  "max_tokens": 4096,
+  "timeout": 120,
+  "category": "async",
+  "checks": 8,
+  "title": "Bounded-concurrency async map in JavaScript"
+}

@@ -1,0 +1,10 @@
+{
+  "id": "t01_weighted_jobs",
+  "lang": "py",
+  "kind": "file",
+  "category": "algorithms",
+  "timeout": 180,
+  "max_tokens": 8192,
+  "checks": 12,
+  "title": "Weighted interval scheduling: maximum profit"
+}

@@ -1,0 +1,10 @@
+{
+  "id": "t07_thread_queue",
+  "lang": "py",
+  "kind": "file",
+  "category": "concurrency",
+  "timeout": 180,
+  "max_tokens": 8192,
+  "checks": 23,
+  "title": "Thread-safe bounded FIFO queue"
+}

@@ -1,0 +1,10 @@
+{
+  "id": "t08_code_review",
+  "lang": "json",
+  "kind": "review",
+  "category": "review",
+  "timeout": 120,
+  "max_tokens": 8192,
+  "checks": 14,
+  "title": "Code review: report every real defect"
+}

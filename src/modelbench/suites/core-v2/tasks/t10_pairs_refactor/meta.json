@@ -1,0 +1,10 @@
+{
+  "id": "t10_pairs_refactor",
+  "lang": "py",
+  "kind": "file",
+  "category": "refactor",
+  "timeout": 120,
+  "max_tokens": 8192,
+  "checks": 13,
+  "title": "Refactor an O(n^2) pairing function"
+}

@@ -1,0 +1,10 @@
+{
+  "id": "t5_debug_topk",
+  "kind": "file",
+  "lang": "py",
+  "max_tokens": 4096,
+  "timeout": 120,
+  "category": "debugging",
+  "checks": 8,
+  "title": "Debug a top-k selection helper"
+}
