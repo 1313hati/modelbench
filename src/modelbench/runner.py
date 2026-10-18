@@ -18,6 +18,32 @@ from .tasks import Suite, Task
 from .util import append_jsonl, human_duration, mean, now_iso, pct, read_jsonl, write_json
 
 
+def resume_pairs(results_path: Path, suite_digest: str, target_name: str) -> set[tuple[str, int]]:
+    """Task/sample pairs already recorded for *this* suite and target.
+
+    A record from another model, or from a suite whose tasks changed, must never
+    be counted as progress: the report would look complete while mixing two
+    different benchmarks.
+    """
+    existing: set[tuple[str, int]] = set()
+    foreign: list[str] = []
+    for record in read_jsonl(results_path):
+        if record.get("suite_digest") not in (None, suite_digest):
+            foreign.append(f"{record.get('task')} s{record.get('sample')} (suite digest changed)")
+            continue
+        if record.get("target") not in (None, target_name):
+            foreign.append(f"{record.get('task')} s{record.get('sample')} (target {record.get('target')!r})")
+            continue
+        existing.add((str(record.get("task")), int(record.get("sample") or 0)))
+    if foreign:
+        raise ModelBenchError(
+            f"{results_path} already holds records that do not belong to this run "
+            f"({foreign[0]}, {len(foreign)} total). Resuming would mix them into one report. "
+            "Use a different --out, or move the old results.jsonl aside first."
+        )
+    return existing
+
+
 @dataclass
 class RunPlan:
     suite: Suite
@@ -264,8 +290,7 @@ class Runner:
 
         existing: set[tuple[str, int]] = set()
         if plan.resume:
-            for record in read_jsonl(self.results_path):
-                existing.add((record.get("task"), int(record.get("sample") or 0)))
+            existing = resume_pairs(self.results_path, self.suite_digest, plan.target.name)
             if existing:
                 self.print(f"resume: {len(existing)} task/sample record(s) already present")
 
@@ -305,11 +330,14 @@ class Runner:
         except KeyboardInterrupt:
             self.print("\ninterrupted — partial results are on disk")
             self._finish_meta(meta, tasks, status="interrupted", elapsed=time.time() - started)
-            self._stop_server()
+            raise
+        except Exception:
+            # A run that dies before the loop — endpoint never ready, config
+            # error, crash — must not leave run.json claiming to be running.
+            self._finish_meta(meta, tasks, status="failed", elapsed=time.time() - started)
             raise
         finally:
-            if meta.get("status") == "running":
-                self._stop_server()
+            self._stop_server()
 
         elapsed = time.time() - started
         self._finish_meta(meta, tasks, status="finished", elapsed=elapsed)

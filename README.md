@@ -182,7 +182,7 @@ key. `[project]` sets the default `suite` and extra `suite_paths`.
 | `modelbench list` | show suites, and the tasks inside one suite |
 | `modelbench doctor` | check config, suite, grader runtimes and endpoint reachability |
 | `modelbench run` | benchmark one target |
-| `modelbench report` | aggregate runs into `REPORT.md` + `summary.json` |
+| `modelbench report` | aggregate runs into `REPORT.md`, `REPORT.html` + `summary.json` |
 | `modelbench validate` | prove every reference solution still scores 100% |
 | `modelbench self-test` | end-to-end run against a mock model, no GPU needed |
 | `modelbench mock` | serve reference answers from a fake OpenAI endpoint |
@@ -217,6 +217,8 @@ Useful flags:
 | `--order task` | run all samples of a task back-to-back instead of interleaved |
 | `--out DIR`, `--name LABEL` | where to write, and how the run is labelled |
 | `--no-report` | skip `REPORT.md` (write it later with `modelbench report`) |
+| `--dry-run` | print the plan — tasks, caps, prompt size, call count, token ceiling — and exit without calling the endpoint |
+| `--no-html`, `--html PATH` | skip the HTML page, or write it somewhere specific |
 | `--allow-missing-runners` | skip tasks whose runtime is absent instead of failing them |
 | `--no-manage-server` | ignore `start_cmd`/`stop_cmd` from the config |
 | `--fail-fast` | stop on the first task error |
@@ -250,7 +252,9 @@ task wins: local-27b 4, local-9b 1, ties 7 (mean delta +12.4 pp)
 Any number of runs can be compared; with more than two, each task shows the
 best model instead of a delta. `--json` prints the machine-readable summary
 instead of writing files, and `--notes-file` appends your own context to the
-report.
+report. `--strict` exits 1 if any run is missing records, holds duplicates or
+carries task errors — useful as a CI gate. `--html PATH` writes the shareable
+page outside the output directory.
 
 ## What is actually measured
 
@@ -347,23 +351,52 @@ If you publish a suite, its reference solutions must pass every assertion
 
 ## Reading a report
 
-`REPORT.md` has six sections, in this order:
+Each report exists in three formats, written together:
+
+| file | for |
+|---|---|
+| `REPORT.md` | reading in the repo, pasting into a PR or an issue |
+| `REPORT.html` | sharing: one self-contained page, opens offline, no assets |
+| `summary.json` | dashboards, CI gates, your own plotting |
+
+The HTML page is the pleasant one: at-a-glance cards, a sortable per-task
+matrix with score bars and deltas, per-category scores, sample stability,
+failure signatures, provenance, integrity, and the commands that reproduce it.
+It is a single file with inline CSS and a ~20-line sort script — no CDN, no
+fonts, no network access, and it renders the same from disk in five years.
+
+`REPORT.md` has these sections, in this order:
 
 - **Verdict** — one sentence naming the leader and the margin, calculated from
   first-attempt scores.
 - **Headline** — records vs expected, first/final scores, assertion rate,
-  solved rate, repair behaviour, wall time, tokens, tokens per solved task.
+  solved rate, repair behaviour, sample stability, wall time, tokens, tokens
+  per solved task.
 - **Per task** — the same scores per task with deltas and a task-win count.
   This is where you see *which kind* of work a model is bad at.
 - **Per category** — the same data grouped by category.
+- **Where it fails** — failing assertions grouped by name, so "fails
+  `handles_negative_input` in both samples of two tasks" is visible as a
+  systematic gap rather than a percentage.
 - **Provenance** — endpoint, served model id, samples, suite digest.
 - **Integrity** — missing records, duplicates, cap hits, graders without a
   `RESULT` line, salvage operations.
 
+Two lines in the headline deserve a habit:
+
+- **tasks where samples differ** — if the two samples of a task disagree, that
+  task's mean is a coin flip dressed as a number. A model that scores 90% with
+  five unstable tasks is not better than one that scores 89% with none; it is
+  noisier.
+- **mean within-task spread** — the average gap between best and worst sample
+  of the same task. Under ~5 pp the suite is behaving deterministically for that
+  model; above ~20 pp you need more samples before comparing anything.
+
 The integrity section is the one to read first. A 99% score from a run with six
 missing records is not a 99% score. `modelbench` never silently drops a failed
 task: it writes `errors.log`, keeps the successful records, and marks the run
-incomplete.
+incomplete. `modelbench report --strict` turns that into exit code 1, which is
+what you want in CI.
 
 ## Write your own suite
 
@@ -445,6 +478,7 @@ Two commands make the benchmark testable on a laptop with no GPU:
 ```bash
 modelbench validate                # every reference solution scores 100%
 modelbench self-test               # full end-to-end run against a mock model
+modelbench self-test --keep        # ... and keep the run directory to look inside
 ```
 
 `self-test` starts a local mock endpoint that streams the reference answers,
@@ -458,6 +492,10 @@ repair turn). It is the same thing CI runs, and it takes about a minute:
 3. failure paths              cap retry recorded, repair turn scored below 100%
 SELF-TEST PASSED
 ```
+
+With `--keep` it prints the temporary directory, so you can open `REPORT.html`
+and see exactly what a finished report looks like before spending an hour on a
+real model.
 
 `modelbench mock` exposes the same server on a port if you want to poke at it
 with `curl` or test a client of your own.

@@ -24,14 +24,16 @@ from .config import Config, Generation, Target, find_config, target_from_cli
 from .errors import ModelBenchError, SuiteError, TaskError
 from .grader import grade, runner_available
 from .mockserver import start_mock
-from .prompts import SINGLE_WRAPPER, REPAIR_PROMPT
+from .prompts import SINGLE_WRAPPER, REPAIR_PROMPT, build_prompt
 from .report import (
     discover_runs,
     dump_json,
     load_run,
     load_runs,
     render_console,
+    render_html,
     render_json,
+    run_metrics,
     write_reports,
 )
 from .runner import RunPlan, Runner
@@ -202,12 +204,38 @@ def cmd_validate(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 # run
 # --------------------------------------------------------------------------- #
+def _print_plan(suite: Suite, plan: RunPlan, out: Path) -> None:
+    """Describe a run without contacting the endpoint."""
+    tasks = suite.select(plan.only, plan.exclude)
+    rows, chars, ceiling = [], 0, 0
+    for task in tasks:
+        prompt = build_prompt(task, suite.prompt_text)
+        chars += len(prompt)
+        cap = plan.max_tokens or task.max_tokens
+        ceiling += cap * plan.samples
+        rows.append([task.id, task.category, f"{cap:,}", f"{len(prompt):,}", task.runner])
+    print(column_table(["task", "category", "cap", "prompt chars", "grader"], rows, align=["l", "l", "r", "r", "l"]))
+    calls = len(tasks) * plan.samples
+    repair_note = f", up to {calls * 2} with repair turns" if plan.repair else ""
+    print(f"\n{len(tasks)} task(s) × {plan.samples} sample(s) = {calls} first call(s){repair_note}")
+    print(f"prompt text   {chars:,} chars total (~{chars / 4:,.0f} input tokens at 4 chars/token)")
+    print(f"output ceiling {ceiling:,} completion tokens before repairs and cap retries")
+    print(f"suite digest  {suite.digest()[:12]} · nothing was sent to the endpoint")
+    print(f"would write   {out}")
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     config = _config(args, required=True)
     suite = _suite(args, config)
     target = _target(args, config)
-    if args.temperature is not None:
-        target.generation = target.generation.merged(temperature=args.temperature)
+    overrides = {
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+        "top_k": args.top_k,
+        "seed": args.seed,
+    }
+    if any(value is not None for value in overrides.values()):
+        target.generation = target.generation.merged(**overrides)
 
     label = args.name or target.name
     out = Path(args.out).expanduser() if args.out else Path("runs") / f"{label}-{suite.id}-{_stamp()}"
@@ -233,8 +261,18 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     print(f"suite    {suite.id} ({len(suite.tasks)} tasks, {suite.total_checks} checks, digest {suite.digest()[:12]})")
     print(f"target   {target.name} @ {target.base_url} model={target.model}")
-    print(f"samples  {plan.samples}   repair={plan.repair}   order={plan.order}")
+    gen = target.generation
+    sampling = " ".join(
+        f"{key}={value}"
+        for key, value in (("temp", gen.temperature), ("top_p", gen.top_p), ("top_k", gen.top_k), ("seed", gen.seed))
+        if value is not None
+    )
+    print(f"samples  {plan.samples}   repair={plan.repair}   order={plan.order}   {sampling}")
     print(f"output   {out}\n")
+
+    if args.dry_run:
+        _print_plan(suite, plan, out)
+        return 0
 
     try:
         outcome = Runner(plan).execute()
@@ -250,9 +288,21 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(render_console([run]))
     if not args.no_report:
         title = args.title or f"modelbench — {label} on {suite.id}"
-        md_path, json_path = write_reports([run], out, title=title, notes=args.notes)
-        print(f"\nreport   {md_path}")
-        print(f"summary  {json_path}")
+        paths = write_reports(
+            [run], out, title=title, notes=args.notes, html=not args.no_html
+        )
+        print(f"\nreport   {paths['markdown']}")
+        print(f"summary  {paths['json']}")
+        if paths["html"]:
+            print(f"html     {paths['html']}")
+    if args.html:
+        custom = Path(args.html).expanduser()
+        custom.parent.mkdir(parents=True, exist_ok=True)
+        custom.write_text(
+            render_html([run], title=args.title or f"modelbench — {label} on {suite.id}", notes=args.notes),
+            encoding="utf-8",
+        )
+        print(f"html     {custom}")
     if outcome.errors:
         print(f"\nwarning: {outcome.errors} task(s) failed and were not recorded; see {out / 'errors.log'}")
         return 1
@@ -262,6 +312,23 @@ def cmd_run(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 # report
 # --------------------------------------------------------------------------- #
+def _strict_exit(runs: list) -> int:
+    """Exit 1 when a run is incomplete, duplicated or carries errors (CI mode)."""
+    issues: list[str] = []
+    for run in runs:
+        m = run_metrics(run)
+        if m["missing"]:
+            issues.append(f"{run.label}: {len(m['missing'])} missing record(s)")
+        if m["duplicates"]:
+            issues.append(f"{run.label}: {len(m['duplicates'])} duplicated record(s)")
+        if m["errors"]:
+            issues.append(f"{run.label}: {m['errors']} record(s) with run errors")
+    if not issues:
+        return 0
+    print("\nstrict: " + "; ".join(issues), file=sys.stderr)
+    return 1
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     paths: list[Path] = []
     for entry in args.paths:
@@ -283,11 +350,20 @@ def cmd_report(args: argparse.Namespace) -> int:
     out = Path(args.out) if args.out else (paths[0] if len(paths) == 1 else Path("reports"))
     if args.json:
         print(dump_json(render_json(runs, title=args.title)))
-        return 0
-    md_path, json_path = write_reports(runs, out, title=args.title, notes=notes)
-    print(f"\nreport   {md_path}")
-    print(f"summary  {json_path}")
-    return 0
+        return _strict_exit(runs) if args.strict else 0
+    paths_written = write_reports(
+        runs, out, title=args.title, notes=notes, html=not args.no_html
+    )
+    print(f"\nreport   {paths_written['markdown']}")
+    print(f"summary  {paths_written['json']}")
+    if paths_written["html"]:
+        print(f"html     {paths_written['html']}")
+    if args.html:
+        custom = Path(args.html).expanduser()
+        custom.parent.mkdir(parents=True, exist_ok=True)
+        custom.write_text(render_html(runs, title=args.title, notes=notes), encoding="utf-8")
+        print(f"html     {custom}")
+    return _strict_exit(runs) if args.strict else 0
 
 
 # --------------------------------------------------------------------------- #
@@ -440,10 +516,17 @@ def cmd_self_test(args: argparse.Namespace) -> int:
             print(f"   {'ok  ' if ok else 'FAIL'} {message}")
             if not ok:
                 failures.append(message)
-        md_path, json_path = write_reports([run], workdir / "run", title="self-test")
+        paths = write_reports([run], workdir / "run", title="self-test")
+        md_path, json_path = paths["markdown"], paths["json"]
         if not md_path.is_file() or "## Headline" not in md_path.read_text(encoding="utf-8"):
             failures.append("report was not generated correctly")
-        print(f"   ok   report + summary written ({md_path.name}, {json_path.name})")
+        html_path = paths["html"]
+        if html_path is None or "At a glance" not in html_path.read_text(encoding="utf-8"):
+            failures.append("HTML report was not generated correctly")
+        print(
+            f"   ok   report + summary + html written "
+            f"({md_path.name}, {json_path.name}, {html_path.name if html_path else '—'})"
+        )
 
         print("\n3. failure paths")
         first = suite.tasks[0]
@@ -633,16 +716,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--allow-missing-runners", action="store_true", help="drop tasks whose runtime is missing")
     p.add_argument("--no-manage-server", action="store_true", help="ignore start_cmd/stop_cmd in the config")
     p.add_argument("--no-report", action="store_true", help="do not write REPORT.md after the run")
+    p.add_argument("--no-html", action="store_true", help="do not write REPORT.html next to REPORT.md")
+    p.add_argument("--html", default=None, help="also write the HTML report to this path")
+    p.add_argument("--dry-run", action="store_true", help="print the plan and exit without calling the endpoint")
     p.add_argument("--title", help="report title")
     p.add_argument("--notes", help="free-text notes appended to the report")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("report", help="aggregate one or more runs into a report")
     p.add_argument("paths", nargs="+", help="run directories (or a directory containing runs)")
-    p.add_argument("--out", help="where to write REPORT.md + summary.json")
+    p.add_argument("--out", help="where to write REPORT.md + summary.json + REPORT.html")
     p.add_argument("--title", default=None)
     p.add_argument("--notes", default=None)
     p.add_argument("--notes-file", default=None)
+    p.add_argument("--no-html", action="store_true", help="skip the standalone HTML report")
+    p.add_argument("--html", default=None, help="also write the HTML report to this path")
+    p.add_argument("--strict", action="store_true", help="exit 1 if a run has missing, duplicated or failed records")
     p.add_argument("--json", action="store_true", help="print the summary JSON instead of writing files")
     p.set_defaults(func=cmd_report)
 

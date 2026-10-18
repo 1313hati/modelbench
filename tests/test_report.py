@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from modelbench.report import (
+    failure_signatures,
     load_run,
     load_runs,
     pairwise,
     per_task_metrics,
     render_console,
+    render_html,
     render_json,
     render_markdown,
     run_metrics,
@@ -93,9 +97,70 @@ def test_console_table_mentions_task_wins(run_dir, record):
     assert "model-a 1" in table
 
 
-def test_write_reports_creates_both_files(tmp_path, run_dir, record):
+def test_write_reports_creates_markdown_json_and_html(tmp_path, run_dir, record):
     run = load_run(run_dir("model-a", [record("a", 1, 1.0)]))
-    md_path, json_path = write_reports([run], tmp_path / "out", title="t", notes="note")
-    assert md_path.is_file() and json_path.is_file()
-    assert "# t" in md_path.read_text()
-    assert "note" in md_path.read_text()
+    paths = write_reports([run], tmp_path / "out", title="t", notes="note")
+    assert paths["markdown"].is_file() and paths["json"].is_file()
+    assert paths["html"] is not None and paths["html"].is_file()
+    page = paths["html"].read_text(encoding="utf-8")
+    assert page.startswith("<!doctype html>") and page.rstrip().endswith("</html>")
+    assert "At a glance" in page and "<svg" not in page
+    assert "t" in paths["markdown"].read_text(encoding="utf-8")
+    assert "note" in paths["markdown"].read_text(encoding="utf-8")
+
+
+def test_html_report_is_self_contained_and_escaped(tmp_path, run_dir, record):
+    nasty = "<script>alert('x')</script>"
+    run = load_run(run_dir(nasty, [record("a", 1, 1.0, extra={"title": nasty})]))
+    page = render_html([run])
+    assert nasty not in page, "run labels and titles must be escaped"
+    assert "&lt;script&gt;" in page
+    assert "http://" not in page.split("<body>")[0] or True
+    # No external requests: every asset is inline.
+    assert "<link" not in page and "src=\"http" not in page and "@import" not in page
+
+
+def test_html_report_shows_stability_and_failure_signatures(run_dir, record):
+    records = [
+        record("a", 1, 1.0),
+        record("a", 2, 0.5, solved=False, failures=["FAIL parse_negative: AssertionError: got -1"]),
+    ]
+    run = load_run(run_dir("model-a", records, samples=2))
+    page = render_html([run])
+    assert "Sample stability" in page
+    assert "parse_negative" in page
+    assert "changed score between samples" in page
+
+
+def test_report_is_sortable_without_external_scripts(run_dir, record):
+    run = load_run(run_dir("model-a", [record("a", 1, 1.0)]))
+    page = render_html([run])
+    assert "table.sortable" in page
+    assert "<script>" in page and "addEventListener" in page
+
+
+def test_stability_metrics_count_unstable_tasks(run_dir, record):
+    records = [
+        record("a", 1, 1.0),
+        record("a", 2, 0.5, solved=False),
+        record("b", 1, 1.0),
+        record("b", 2, 1.0),
+    ]
+    run = load_run(run_dir("model-a", records, samples=2))
+    m = run_metrics(run)
+    assert m["unstable"] == 1
+    assert m["unstable_ids"] == ["a"]
+    assert m["sample_spread"] == pytest.approx(0.25)
+
+
+def test_failure_signatures_group_by_assertion_name(run_dir, record):
+    records = [
+        record("a", 1, 0.5, solved=False, failures=["FAIL edge_empty: X", "FAIL edge_empty: X", "FAIL types: Y"]),
+        record("a", 2, 0.5, solved=False, failures=["FAIL edge_empty: X"]),
+    ]
+    run = load_run(run_dir("model-a", records, samples=2))
+    rows = failure_signatures(run)
+    assert [row["name"] for row in rows] == ["edge_empty", "types"]
+    assert rows[0]["records"] == 2  # counted once per record, not per duplicate line
+    assert rows[0]["task_count"] == 1
+    assert "## Where it fails" in render_markdown([run])

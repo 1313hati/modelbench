@@ -55,7 +55,97 @@ def test_report_command_writes_files(tmp_path: Path, run_dir, record, capsys):
     assert main(["report", str(run), "--out", str(out)]) == 0
     assert (out / "REPORT.md").is_file()
     assert (out / "summary.json").is_file()
+    assert (out / "REPORT.html").is_file()
     assert "model-a" in capsys.readouterr().out
+
+
+def test_report_no_html_skips_the_page(tmp_path: Path, run_dir, record):
+    run = run_dir("model-a", [record("a", 1, 1.0)])
+    out = tmp_path / "report"
+    assert main(["report", str(run), "--out", str(out), "--no-html"]) == 0
+    assert (out / "REPORT.md").is_file()
+    assert not (out / "REPORT.html").exists()
+
+
+def test_report_html_accepts_a_custom_path(tmp_path: Path, run_dir, record):
+    run = run_dir("model-a", [record("a", 1, 1.0)])
+    page = tmp_path / "site" / "bench.html"
+    assert main(["report", str(run), "--out", str(tmp_path / "r"), "--html", str(page)]) == 0
+    assert page.is_file() and "At a glance" in page.read_text(encoding="utf-8")
+
+
+def test_report_strict_exits_nonzero_on_missing_records(tmp_path: Path, run_dir, record, capsys):
+    run = run_dir("model-a", [record("a", 1, 1.0)], tasks=["a", "b"])
+    assert main(["report", str(run), "--out", str(tmp_path / "r"), "--strict"]) == 1
+    assert "strict:" in capsys.readouterr().err
+    complete = run_dir("model-b", [record("a", 1, 1.0)], tasks=["a"])
+    assert main(["report", str(complete), "--out", str(tmp_path / "r2"), "--strict"]) == 0
+
+
+CONFIG = """
+[targets.local]
+base_url = "http://127.0.0.1:9/v1"
+model = "some-model"
+"""
+
+
+def test_run_dry_run_prints_the_plan_without_touching_the_endpoint(tmp_path: Path, monkeypatch, capsys):
+    config = tmp_path / "modelbench.toml"
+    config.write_text(CONFIG, encoding="utf-8")
+    out = tmp_path / "run"
+    code = main(
+        [
+            "run",
+            "--config",
+            str(config),
+            "--target",
+            "local",
+            "--dry-run",
+            "--samples",
+            "2",
+            "--only",
+            "t01_weighted_jobs",
+            "--out",
+            str(out),
+        ]
+    )
+    assert code == 0
+    printed = capsys.readouterr().out
+    assert "nothing was sent to the endpoint" in printed
+    assert "t01_weighted_jobs" in printed
+    assert "2 first call(s), up to 4 with repair turns" in printed
+    assert not out.exists()
+
+
+def test_run_dry_run_shows_sampling_overrides(tmp_path: Path, capsys):
+    config = tmp_path / "modelbench.toml"
+    config.write_text(CONFIG, encoding="utf-8")
+    code = main(
+        [
+            "run",
+            "--config",
+            str(config),
+            "--target",
+            "local",
+            "--dry-run",
+            "--only",
+            "t01_weighted_jobs",
+            "--temperature",
+            "0.2",
+            "--top-p",
+            "0.5",
+            "--top-k",
+            "5",
+            "--seed",
+            "7",
+            "--out",
+            str(tmp_path / "run"),
+        ]
+    )
+    assert code == 0
+    printed = capsys.readouterr().out
+    for expected in ("temp=0.2", "top_p=0.5", "top_k=5", "seed=7"):
+        assert expected in printed, expected
 
 
 def test_run_without_config_fails_cleanly(tmp_path: Path, monkeypatch, capsys):

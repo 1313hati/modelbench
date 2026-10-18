@@ -64,6 +64,7 @@ def record():
     def build(task: str = "t01", sample: int = 1, score: float = 1.0, solved: bool = True, **extra):
         total = extra.pop("total", 10)
         passed = extra.pop("passed", int(score * total))
+        failures = extra.pop("failures", [])
         data = {
             "record_version": 2,
             "model": "model-a",
@@ -93,6 +94,7 @@ def record():
                 "source": "fence",
                 "no_result_line": False,
                 "discarded_calls": [],
+                "failures": list(failures),
             },
             "repair": None,
             "final_score": score,
