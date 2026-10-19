@@ -7,11 +7,15 @@ task and assertion counts cannot drift away from the code they describe. Run:
     python scripts/make_release_art.py --png
 
 writes ``assets/release-<version>.svg`` and, with ``--png``, a 1600×900 PNG.
+The counts come from the suites; the words come from
+``scripts/release-themes/<version>.json`` when that file exists, so a release
+can say what it actually changed without anyone editing the renderer.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
@@ -38,6 +42,11 @@ GREEN = "#34d399"
 SANS = "ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif"
 MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace"
 
+THEME_DIR = Path(__file__).resolve().parent / "release-themes"
+
+DEFAULT_HEADLINE = "A score you can defend."
+DEFAULT_SUBHEAD = "Most benchmarks print a number. modelbench prints the doubt, the bill and the receipts."
+
 TILES = [
     ("± 95%", "Confidence on every score", "bootstrapped over tasks, seeded, reproducible"),
     ("p < 0.05", "A winner needs both tests", "interval excludes zero and the sign test agrees"),
@@ -58,9 +67,25 @@ def tile(x: int, y: int, figure: str, label: str, desc: str) -> str:
 </g>'''
 
 
-def render(tasks: int, assertions: int, suites: int) -> str:
+def load_theme(version: str) -> dict:
+    path = THEME_DIR / f"{version}.json"
+    if not path.is_file():
+        return {}
+    theme = json.loads(path.read_text(encoding="utf-8"))
+    tiles = theme.get("tiles") or TILES
+    if len(tiles) != 6:
+        raise SystemExit(f"{path}: a release needs exactly 6 tiles, got {len(tiles)}")
+    theme["tiles"] = [tuple(tile) for tile in tiles]
+    return theme
+
+
+def render(tasks: int, assertions: int, suites: int, theme: dict | None = None) -> str:
+    theme = theme or {}
+    headline = theme.get("headline", DEFAULT_HEADLINE)
+    subhead = theme.get("subhead", DEFAULT_SUBHEAD)
+    tiles = theme.get("tiles", TILES)
     grid = []
-    for index, (figure, label, desc) in enumerate(TILES):
+    for index, (figure, label, desc) in enumerate(tiles):
         col, row = index % 3, index // 3
         grid.append(tile(78 + col * 482, 392 + row * 178, figure, label, desc))
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img" aria-label="modelbench {__version__} release">
@@ -91,8 +116,8 @@ def render(tasks: int, assertions: int, suites: int) -> str:
 <text x="80" y="82" font-family="{MONO}" font-size="17" letter-spacing="3.2" fill="{MUTED}">MODELBENCH</text>
 <text x="1520" y="82" text-anchor="end" font-family="{MONO}" font-size="15" fill="{DIM}">v{__version__} · {suites} suites · {tasks} tasks · {assertions} assertions</text>
 
-<text x="76" y="236" font-family="{SANS}" font-size="92" font-weight="700" letter-spacing="-3.5" fill="url(#text)">A score you can defend.</text>
-<text x="80" y="300" font-family="{SANS}" font-size="26" fill="{MUTED}">Most benchmarks print a number. modelbench prints the doubt, the bill and the receipts.</text>
+<text x="76" y="236" font-family="{SANS}" font-size="92" font-weight="700" letter-spacing="-3.5" fill="url(#text)">{escape(headline)}</text>
+<text x="80" y="300" font-family="{SANS}" font-size="26" fill="{MUTED}">{escape(subhead)}</text>
 <rect x="80" y="336" width="1440" height="1.5" fill="url(#rule)"/>
 
 {''.join(grid)}
@@ -108,13 +133,14 @@ def main() -> int:
     parser.add_argument("--out", default=None, help="SVG path (default assets/release-<version>.svg)")
     parser.add_argument("--png", action="store_true", help="also write a PNG next to the SVG")
     args = parser.parse_args()
+    theme = load_theme(__version__)
 
     suites = available_suites()
     tasks = sum(len(suite.tasks) for suite in suites)
     assertions = sum(task.checks for suite in suites for task in suite.tasks)
     out = Path(args.out) if args.out else ROOT / "assets" / f"release-{__version__}.svg"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render(tasks, assertions, len(suites)), encoding="utf-8")
+    out.write_text(render(tasks, assertions, len(suites), theme), encoding="utf-8")
     print(f"{out}  ({tasks} tasks, {assertions} assertions, {len(suites)} suites)")
 
     if args.png:

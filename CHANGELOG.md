@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.1.0
+
+The release where the benchmark stops asking the reader to hold a p-value in
+their head and answers the only question a model comparison actually has.
+
+- **`modelbench compare BASELINE RUN...`** — one verdict per challenger:
+  `better`, `worse`, `not established` or `identical`, with the gap, its 95%
+  interval, the win/loss/tie split and the p-value that produced the verdict.
+  `--fail-on regression` turns it into a CI gate; `--fail-on unresolved`
+  refuses to pass on a coin flip. `--json` and `--md` for machines and PRs.
+- **Holm-Bonferroni across the family.** Testing one baseline against five
+  challengers is five chances to be fooled by noise. `compare` adjusts the
+  p-values and keeps both the raw and the adjusted number: a comparison that
+  stands alone can correctly stop being significant when it joins a family.
+- **The report states its own resolution.** With 12 tasks the exact sign test
+  needs 10 in one direction to reach p < 0.05; 9 gives p = 0.146. That bar is
+  printed next to the test, so a mean carried by four tasks is visible as such
+  instead of looking like a finding.
+- **`--jobs N`** runs task/sample pairs concurrently. The pairs were already
+  independent — each owns its sample directory — and the results file, error
+  log and progress line are serialised through a lock. The default stays 1,
+  because a single-slot local server gains nothing from a queue of requests.
+- `sign_test_min_wins()` and `holm()` in `stats.py`, both tested against known
+  values (10/12, 6/6, 5/None) instead of against their own output.
+- 98 -> 105 tests.
+
 ## 2.0.0
 
 The release where the benchmark starts reporting its own uncertainty, its cost,

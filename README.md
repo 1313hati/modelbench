@@ -62,6 +62,7 @@ a confidence interval on every score       a price on every solve
 - [Run it](#run-it)
 - [Compare models](#compare-models)
 - [Is the gap real?](#is-the-gap-real)
+- [Did it beat the baseline?](#did-it-beat-the-baseline)
 - [What it costs](#what-it-costs)
 - [Share a scorecard](#share-a-scorecard)
 - [Rank the runs you have](#rank-the-runs-you-have)
@@ -194,6 +195,9 @@ key. `[project]` sets the default `suite` and extra `suite_paths`.
 | `modelbench validate` | prove every reference solution still scores 100% |
 | `modelbench self-test` | end-to-end run against a mock model, no GPU needed |
 | `modelbench mock` | serve reference answers from a fake OpenAI endpoint |
+| `modelbench card` | render a run as a 1200×675 SVG/PNG scorecard |
+| `modelbench compare` | is a run actually different from the baseline? |
+| `modelbench leaderboard` | rank local runs; overlapping intervals share a place |
 | `modelbench init-suite` | scaffold a new suite with one example task |
 
 ```bash
@@ -224,6 +228,7 @@ Useful flags:
 | `--no-repair` | grade the first answer only |
 | `--resume` | skip task/sample pairs already in `results.jsonl` |
 | `--order task` | run all samples of a task back-to-back instead of interleaved |
+| `--jobs N` | run N task/sample pairs at once (hosted endpoints; a single-slot local server gains nothing) |
 | `--out DIR`, `--name LABEL` | where to write, and how the run is labelled |
 | `--no-report` | skip `REPORT.md` (write it later with `modelbench report`) |
 | `--dry-run` | print the plan — tasks, caps, prompt size, call count, token ceiling — and exit without calling the endpoint |
@@ -298,6 +303,44 @@ A gap counts as established only when **both** tests agree: the interval must
 exclude zero *and* the sign test must clear the threshold. When they disagree
 the report says so. When two runs tie on every task it says that too, instead
 of printing a meaningless `+0.0 pp`.
+
+The suite also has a resolution, and it is worth saying out loud: with twelve
+tasks the exact sign test needs **ten of them moving the same way** to reach
+p < 0.05 (nine gives p = 0.146). A 40-point gap carried by four tasks is not a
+finding, however impressive the mean looks. Reports quote that bar next to the
+test, so the reader can see what the suite can settle and what it cannot.
+
+## Did it beat the baseline?
+
+`report` shows every model. `compare` answers one question per challenger, and
+answers it in a form a script can act on:
+
+```bash
+modelbench compare runs/local-27b runs/local-9b runs/hosted-mini
+```
+
+```text
+baseline  local-27b  99.7% (98.9–100.0%)  core-v2 · 12 tasks · 2 sample(s)
+
+run          score                 gap vs baseline              p (Holm)  verdict
+hosted-mini  91.2% (88.4–93.6%)     -8.5 pp (-13.1, -3.9)            0.006  worse
+local-9b     95.1% (92.6–97.4%)     -4.6 pp (-9.8, +0.6)             0.375  not established
+
+resolution: with 12 tasks the exact sign test needs 10/12 in the same direction
+to reach p < 0.05; anything smaller is not established, whatever the interval says.
+```
+
+The p-values are **Holm-adjusted** across the challengers. Testing one baseline
+against five models is five chances to be fooled by noise; Holm controls that
+family-wise error rate without assuming independence, and without the flat tax
+of a Bonferroni multiplier. A comparison that is significant on its own can
+stop being significant when it joins a family — that is the correction doing
+its job, and `compare` shows both numbers in `--json`.
+
+`--fail-on regression` exits 1 when a challenger is established as worse than
+the baseline; `--fail-on unresolved` exits 1 when a comparison settles nothing,
+for teams that would rather fail than guess. `--md` prints a table ready for a
+PR comment; `--json` is the same verdict for machines.
 
 ## What it costs
 

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from . import __version__
-from .stats import bootstrap_mean_ci, fmt_p, paired_delta
+from .stats import bootstrap_mean_ci, fmt_p, paired_delta, sign_test_min_wins
 from .util import (
     column_table,
     int_fmt,
@@ -662,10 +662,14 @@ def render_markdown(
             gap = pair.gap_pp
             ci = pair.gap_ci
             ci_text = f"{_signed_pp(ci[0])} to {_signed_pp(ci[1])} pp" if ci else "no interval"
+            decided = pair.wins_a + pair.wins_b
             evidence = (
                 f"95% CI {ci_text}, two-sided sign test {fmt_p(pair.p_value)} over "
-                f"{pair.wins_a + pair.wins_b} decided task{'s' if pair.wins_a + pair.wins_b != 1 else ''}"
+                f"{decided} decided task{'s' if decided != 1 else ''}"
             )
+            needed = sign_test_min_wins(decided) if decided else None
+            if needed:
+                evidence += f" (the test needs {needed}/{decided} in one direction to reach p < 0.05)"
             noise_clause = (
                 f", against ±{pair.noise_pp:.1f} pp of run-to-run noise"
                 if pair.noise_pp > 0

@@ -7,6 +7,7 @@
     modelbench validate             # reference solutions must score 100%
     modelbench self-test            # end-to-end check with a mock model
     modelbench card RUN             # a shareable SVG scorecard
+    modelbench compare BASE RUN...  # is a run actually different from the baseline
     modelbench leaderboard runs/*   # rank runs, with ties and a frontier
 """
 
@@ -25,6 +26,12 @@ from pathlib import Path
 from . import __version__
 from .card import write_card
 from .client import ChatClient, probe
+from .compare import (
+    compare_paths,
+    exit_code as compare_exit_code,
+    render_console as render_comparison,
+    render_markdown as render_comparison_markdown,
+)
 from .config import Config, Generation, Target, find_config, target_from_cli
 from .explain import failing_records, load as load_explain, render_index, render_record
 from .errors import ModelBenchError, SuiteError, TaskError
@@ -270,6 +277,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         fail_fast=args.fail_fast,
         quiet=args.quiet,
         allow_missing_runners=args.allow_missing_runners,
+        jobs=max(1, args.jobs),
     )
     if target.start_cmd and not args.no_manage_server:
         plan.manage_server = True
@@ -629,6 +637,7 @@ def cmd_self_test(args: argparse.Namespace) -> int:
                 samples=args.samples,
                 repair=True,
                 quiet=True,
+                jobs=max(1, args.jobs),
             )
             outcome = Runner(plan, on_progress=lambda line: None).execute()
         run = load_run(workdir / "run")
@@ -791,6 +800,23 @@ def cmd_init_suite(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_compare(args: argparse.Namespace) -> int:
+    try:
+        result = compare_paths(
+            args.baseline, args.others, alpha=args.alpha, allow_mixed=args.allow_mixed
+        )
+    except ValueError as exc:
+        raise ModelBenchError(str(exc)) from exc
+    if args.json:
+        payload = {key: value for key, value in result.items() if not key.startswith("_")}
+        print(json.dumps(payload, indent=2))
+    elif args.md:
+        print(render_comparison_markdown(result))
+    else:
+        print(render_comparison(result))
+    return compare_exit_code(result, args.fail_on)
+
+
 # --------------------------------------------------------------------------- #
 # parser
 # --------------------------------------------------------------------------- #
@@ -846,6 +872,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--resume", action="store_true", help="skip task/sample pairs already recorded")
     p.add_argument("--no-warmup", action="store_true", help="skip the warm-up request")
     p.add_argument("--order", choices=["sample", "task"], default="sample", help="loop nesting")
+    p.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        metavar="N",
+        help="run N task/sample pairs at once (default 1; use it for hosted endpoints, not a single-slot local server)",
+    )
     p.add_argument("--fail-fast", action="store_true", help="stop on the first task error")
     p.add_argument("--allow-missing-runners", action="store_true", help="drop tasks whose runtime is missing")
     p.add_argument("--no-manage-server", action="store_true", help="ignore start_cmd/stop_cmd in the config")
@@ -919,6 +952,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="print the ranking as JSON")
     p.set_defaults(func=cmd_leaderboard)
 
+    p = sub.add_parser("compare", help="is a run actually different from the baseline?")
+    p.add_argument("baseline", help="the run to compare against")
+    p.add_argument("others", nargs="+", help="one or more runs to test against the baseline")
+    p.add_argument("--alpha", type=float, default=0.05, help="significance level (default 0.05)")
+    p.add_argument(
+        "--fail-on",
+        choices=["never", "regression", "unresolved"],
+        default="never",
+        help="exit 1 on an established regression, or on any comparison that settles nothing",
+    )
+    p.add_argument(
+        "--allow-mixed",
+        action="store_true",
+        help="compare runs from different suites or suite versions anyway",
+    )
+    p.add_argument("--json", action="store_true", help="print JSON instead of a table")
+    p.add_argument("--md", action="store_true", help="print a markdown table (for a PR comment)")
+    p.set_defaults(func=cmd_compare)
+
     p = sub.add_parser("mock", help="serve reference answers from a fake OpenAI endpoint")
     add_common(p)
     p.add_argument("--port", type=int, default=0)
@@ -932,6 +984,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--suite", default=None)
     p.add_argument("--samples", type=int, default=1)
     p.add_argument("--keep", action="store_true", help="keep the temporary run directory")
+    p.add_argument("--jobs", type=int, default=1, metavar="N", help="task/sample pairs to run at once")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_self_test)
 

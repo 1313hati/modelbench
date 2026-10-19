@@ -108,6 +108,41 @@ def paired_delta(
     }
 
 
+def sign_test_min_wins(tasks: int, alpha: float = 0.05) -> int | None:
+    """Fewest one-directional wins that the sign test can call significant.
+
+    This is the resolution of the design, not of the data: with 12 tasks the
+    test needs 10 of them to move the same way (p = 0.039); 9 gives p = 0.146
+    and establishes nothing. Quoting that next to a score stops readers from
+    treating a 4-point gap as settled when one task can erase it.
+    """
+    for wins in range((tasks + 1) // 2, tasks + 1):
+        if sign_test_p(wins, tasks - wins) < alpha:
+            return wins
+    return None
+
+
+def holm(pvalues: Sequence[float]) -> list[float]:
+    """Holm-Bonferroni adjusted p-values, in the order they were given.
+
+    Comparing one model against five others is five chances to be fooled by
+    noise. Holm controls the family-wise error rate without assuming the tests
+    are independent, and it is uniformly more powerful than a flat Bonferroni
+    multiplier. Adjusted values are monotone, so a comparison that looked
+    stronger cannot end up with a weaker adjusted p than the one below it.
+    """
+    count = len(pvalues)
+    if count == 0:
+        return []
+    order = sorted(range(count), key=lambda index: pvalues[index])
+    adjusted = [1.0] * count
+    running = 0.0
+    for rank, index in enumerate(order):
+        running = max(running, min(1.0, (count - rank) * float(pvalues[index])))
+        adjusted[index] = running
+    return adjusted
+
+
 def fmt_p(p: float) -> str:
     if p < 0.001:
         return "p < 0.001"

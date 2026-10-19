@@ -1,0 +1,12 @@
+{
+  "headline": "Stop guessing who won.",
+  "subhead": "modelbench 2.1 turns a comparison into a verdict — and says when the suite cannot give you one.",
+  "tiles": [
+    ["compare", "One verdict per model", "better · worse · not established · identical"],
+    ["Holm", "Five tests, one error rate", "p-values corrected across the family"],
+    ["10/12", "The suite states its resolution", "tasks that must agree before p < 0.05"],
+    ["± 95%", "Every gap keeps its interval", "bootstrapped over tasks, seeded"],
+    ["--jobs N", "Use the whole endpoint", "pairs in parallel, records still atomic"],
+    ["105", "Tests green on 3.11–3.14", "and every reference solution passes"]
+  ]
+}

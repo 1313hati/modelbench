@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -73,6 +75,7 @@ class RunPlan:
     quiet: bool = False
     allow_missing_runners: bool = False
     manage_server: bool = False
+    jobs: int = 1
 
 
 @dataclass
@@ -98,6 +101,7 @@ class Runner:
         self.served_id: str | None = None
         self.suite_digest = plan.suite.digest()
         self.errors = 0
+        self._lock = threading.Lock()
         self.skipped: list[str] = []
         self._server_log = None
         self._server_stopped = False
@@ -325,28 +329,31 @@ class Runner:
 
             pairs = self._pairs(tasks)
             total = len(pairs)
-            for index, (task, sample) in enumerate(pairs, start=1):
-                if (task.id, sample) in existing:
-                    self.print(f"[{index:>3}/{total}] {task.id:<24s} s{sample}  skipped (recorded)")
-                    continue
-                prompt = build_prompt(task, plan.suite.prompt_text)
-                try:
-                    record = self.run_one(task, sample, prompt)
-                except (TargetUnavailable, GradeError, ModelBenchError) as exc:
-                    self.errors += 1
-                    self._log_error(task, sample, exc)
-                    if plan.fail_fast:
-                        raise
-                    continue
-                except Exception as exc:  # noqa: BLE001 - one broken task must not end the run
-                    self.errors += 1
-                    self._log_error(task, sample, exc)
-                    if plan.fail_fast:
-                        raise
-                    continue
-                append_jsonl(self.results_path, record)
-                completed += 1
-                self._progress(index, total, task, sample, record)
+            if plan.jobs > 1:
+                completed = self._run_parallel(pairs, existing)
+            else:
+                for index, (task, sample) in enumerate(pairs, start=1):
+                    if (task.id, sample) in existing:
+                        self.print(f"[{index:>3}/{total}] {task.id:<24s} s{sample}  skipped (recorded)")
+                        continue
+                    prompt = build_prompt(task, plan.suite.prompt_text)
+                    try:
+                        record = self.run_one(task, sample, prompt)
+                    except (TargetUnavailable, GradeError, ModelBenchError) as exc:
+                        self.errors += 1
+                        self._log_error(task, sample, exc)
+                        if plan.fail_fast:
+                            raise
+                        continue
+                    except Exception as exc:  # noqa: BLE001 - one broken task must not end the run
+                        self.errors += 1
+                        self._log_error(task, sample, exc)
+                        if plan.fail_fast:
+                            raise
+                        continue
+                    append_jsonl(self.results_path, record)
+                    completed += 1
+                    self._progress(index, total, task, sample, record)
         except KeyboardInterrupt:
             self.print("\ninterrupted — partial results are on disk")
             self._finish_meta(meta, tasks, status="interrupted", elapsed=time.time() - started)
@@ -367,6 +374,46 @@ class Runner:
             f"{self.errors} error(s), {human_duration(elapsed)} → {plan.out_dir}"
         )
         return RunOutcome(plan.out_dir, records, self.errors, elapsed, self.skipped)
+
+    def _run_parallel(self, pairs: list[tuple[Task, int]], existing: set[tuple[str, int]]) -> int:
+        """Run task/sample pairs on several threads.
+
+        Meant for endpoints that serve concurrent requests: a hosted API, or a
+        local server started with several slots. Every pair owns its own sample
+        directory, so the only shared state is the results file, the error log
+        and the progress line — those go through a lock. Progress is printed in
+        completion order, not task order.
+        """
+        pending = [(task, sample) for task, sample in pairs if (task.id, sample) not in existing]
+        jobs = max(1, int(self.plan.jobs))
+        if not pending:
+            return 0
+        self.print(f"running {len(pending)} pair(s) {jobs} at a time")
+        completed = 0
+
+        def work(task: Task, sample: int):
+            prompt = build_prompt(task, self.plan.suite.prompt_text)
+            try:
+                return task, sample, self.run_one(task, sample, prompt)
+            except Exception as exc:  # noqa: BLE001 - same contract as the serial loop
+                with self._lock:
+                    self.errors += 1
+                    self._log_error(task, sample, exc)
+                if self.plan.fail_fast:
+                    raise
+                return task, sample, None
+
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            futures = [pool.submit(work, task, sample) for task, sample in pending]
+            for future in as_completed(futures):
+                task, sample, record = future.result()
+                if record is None:
+                    continue
+                with self._lock:
+                    append_jsonl(self.results_path, record)
+                    completed += 1
+                    self._progress(completed, len(pending), task, sample, record)
+        return completed
 
     def _finish_meta(self, meta: dict, tasks: list[Task], status: str, elapsed: float) -> None:
         meta.update(

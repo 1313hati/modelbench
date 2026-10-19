@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from modelbench.stats import bootstrap_mean_ci, fmt_p, paired_delta, sign_test_p
+from modelbench.stats import bootstrap_mean_ci, fmt_p, holm, paired_delta, sign_test_min_wins, sign_test_p
 
 
 def test_interval_is_reproducible():
@@ -56,3 +56,22 @@ def test_identical_runs_are_not_significant():
 def test_p_formatting():
     assert fmt_p(0.0004) == "p < 0.001"
     assert fmt_p(0.0316) == "p = 0.032"
+
+
+def test_sign_test_min_wins_is_the_resolution_of_the_design():
+    # 10/12 gives p = 0.039; 9/12 gives p = 0.146.
+    assert sign_test_min_wins(12) == 10
+    # Six unanimous tasks are exactly the edge: p = 0.031.
+    assert sign_test_min_wins(6) == 6
+    # Five can never reach 0.05, however lopsided.
+    assert sign_test_min_wins(5) is None
+
+
+def test_holm_adjusts_and_stays_monotone():
+    # Sorted: 0.01 (x3), 0.03 (x2), 0.04 (x1); the largest multiplier binds.
+    assert holm([0.01, 0.04, 0.03]) == [0.03, 0.06, 0.06]
+    # Adjusted values never decrease as the raw p grows, and never exceed 1.
+    adjusted = holm([0.001, 0.02, 0.2, 0.9])
+    assert adjusted == sorted(adjusted)
+    assert all(value <= 1.0 for value in adjusted)
+    assert holm([]) == []
