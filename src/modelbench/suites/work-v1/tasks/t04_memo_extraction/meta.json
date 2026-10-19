@@ -1,0 +1,10 @@
+{
+  "id": "t04_memo_extraction",
+  "title": "Memo to commitments",
+  "category": "extraction",
+  "kind": "file",
+  "lang": "json",
+  "max_tokens": 4096,
+  "timeout": 90,
+  "checks": 16
+}

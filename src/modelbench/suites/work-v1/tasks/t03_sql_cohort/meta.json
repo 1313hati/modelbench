@@ -1,0 +1,10 @@
+{
+  "id": "t03_sql_cohort",
+  "title": "Monthly retention query",
+  "category": "sql",
+  "kind": "file",
+  "lang": "sql",
+  "max_tokens": 3072,
+  "timeout": 90,
+  "checks": 14
+}

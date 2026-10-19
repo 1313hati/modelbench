@@ -199,6 +199,11 @@ class Target:
     stop_cmd: str | None = None
     ready_timeout_s: float = 900.0
     health_path: str = "/health"
+    # USD per 1M tokens. Optional, because a local server costs nothing at the
+    # margin; when set, every report says what the run cost and what one
+    # fully-solved task cost, which is half of "should I use this model".
+    price_input: float | None = None
+    price_output: float | None = None
 
     def __post_init__(self) -> None:
         self.base_url = self.base_url.rstrip("/")
@@ -268,6 +273,10 @@ class Target:
             "extra_body": self.extra_body,
             "has_api_key": bool(self.api_key),
             "managed_server": bool(self.start_cmd),
+            "pricing": {
+                "input_per_mtok": self.price_input,
+                "output_per_mtok": self.price_output,
+            },
         }
 
 
@@ -331,6 +340,8 @@ def _target_from_table(name: str, table: dict, defaults: Generation, base: Path)
         stop_cmd=_str(table, "stop_cmd", where),
         ready_timeout_s=float(_float(table, "ready_timeout_s", where, 900.0)),
         health_path=_str(table, "health_path", where, "/health") or "/health",
+        price_input=_float(table, "price_input", where),
+        price_output=_float(table, "price_output", where),
     )
 
 

@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-label="modelbench 2.0.0 release">
+<defs>
+  <radialGradient id="g1" cx="12%" cy="-10%" r="80%">
+    <stop offset="0%" stop-color="#123244" stop-opacity=".95"/>
+    <stop offset="70%" stop-color="#070b10" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="g2" cx="100%" cy="110%" r="70%">
+    <stop offset="0%" stop-color="#221a4d" stop-opacity=".8"/>
+    <stop offset="100%" stop-color="#070b10" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="text" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0%" stop-color="#7dd3fc"/>
+    <stop offset="55%" stop-color="#22d3ee"/>
+    <stop offset="100%" stop-color="#6366f1"/>
+  </linearGradient>
+  <linearGradient id="rule" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0%" stop-color="#22d3ee" stop-opacity=".85"/>
+    <stop offset="60%" stop-color="#6366f1" stop-opacity=".35"/>
+    <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+  </linearGradient>
+</defs>
+<rect width="1600" height="900" fill="#070b10"/>
+<rect width="1600" height="900" fill="url(#g1)"/>
+<rect width="1600" height="900" fill="url(#g2)"/>
+
+<text x="80" y="82" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="17" letter-spacing="3.2" fill="#8b9aab">MODELBENCH</text>
+<text x="1520" y="82" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="15" fill="#51606f">v2.0.0 · 3 suites · 25 tasks · 467 assertions</text>
+
+<text x="76" y="236" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif" font-size="92" font-weight="700" letter-spacing="-3.5" fill="url(#text)">A score you can defend.</text>
+<text x="80" y="300" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif" font-size="26" fill="#8b9aab">Most benchmarks print a number. modelbench prints the doubt, the bill and the receipts.</text>
+<rect x="80" y="336" width="1440" height="1.5" fill="url(#rule)"/>
+
+<g>
+  <rect x="78" y="392" width="460" height="146" rx="14" fill="#0c131b" stroke="#1b2833"/>
+  <rect x="78" y="392" width="3" height="146" rx="1.5" fill="#6366f1" opacity=".7"/>
+  <text x="106" y="456" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="38" font-weight="600" fill="#22d3ee">± 95%</text>
+  <text x="106" y="490" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif" font-size="18" font-weight="600" fill="#e6edf4">Confidence on every score</text>
+  <text x="106" y="514" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif" font-size="14.5" fill="#8b9aab">bootstrapped over tasks, seeded, reproducible</text>
+</g><g>
+  <rect x="560" y="392" width="460" height="146" rx="14" fill="#0c131b" stroke="#1b2833"/>
+  <rect x="560" y="392" width="3" height="146" rx="1.5" fill="#6366f1" opacity=".7"/>
+  <text x="588" y="456" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="38" font-weight="600" fill="#22d3ee">p &lt; 0.05</text>
+  <text x="588" y="490" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif" font-size="18" font-weight="600" fill="#e6edf4">A winner needs both tests</text>
+  <text x="588" y="514" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif" font-size="14.5" fill="#8b9aab">interval excludes zero and the sign test agrees</text>
+</g><g>
+  <rect x="1042" y="392" width="460" height="146" rx="14" fill="#0c131b" stroke="#1b2833"/>
+  <rect x="1042" y="392" width="3" height="146" rx="1.5" fill="#6366f1" opacity=".7"/>
+  <text x="1070" y="456" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="38" font-weight="600" fill="#22d3ee">$ / solved</text>
+  <text x="1070" y="490" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif" font-size="18" font-weight="600" fill="#e6edf4">The bill, not just the score</text>
+  <text x="1070" y="514" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif" font-size="14.5" fill="#8b9aab">retries and feedback turns included</text>
+</g><g>
+  <rect x="78" y="570" width="460" height="146" rx="14" fill="#0c131b" stroke="#1b2833"/>
+  <rect x="78" y="570" width="3" height="146" rx="1.5" fill="#6366f1" opacity=".7"/>
+  <text x="106" y="634" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="38" font-weight="600" fill="#22d3ee">1200×675</text>
+  <text x="106" y="668" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif" font-size="18" font-weight="600" fill="#e6edf4">A scorecard that travels</text>
+  <text x="106" y="692" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif" font-size="14.5" fill="#8b9aab">one SVG: interval, categories, every task</text>
+</g><g>
+  <rect x="560" y="570" width="460" height="146" rx="14" fill="#0c131b" stroke="#1b2833"/>
+  <rect x="560" y="570" width="3" height="146" rx="1.5" fill="#6366f1" opacity=".7"/>
+  <text x="588" y="634" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="38" font-weight="600" fill="#22d3ee">1=</text>
+  <text x="588" y="668" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif" font-size="18" font-weight="600" fill="#e6edf4">Ties stay ties</text>
+  <text x="588" y="692" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif" font-size="14.5" fill="#8b9aab">overlapping runs share a rank, by design</text>
+</g><g>
+  <rect x="1042" y="570" width="460" height="146" rx="14" fill="#0c131b" stroke="#1b2833"/>
+  <rect x="1042" y="570" width="3" height="146" rx="1.5" fill="#6366f1" opacity=".7"/>
+  <text x="1070" y="634" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="38" font-weight="600" fill="#22d3ee">work-v1</text>
+  <text x="1070" y="668" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif" font-size="18" font-weight="600" fill="#e6edf4">Desk work, not just code</text>
+  <text x="1070" y="692" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif" font-size="14.5" fill="#8b9aab">4 tasks: layout, export, SQL, memo</text>
+</g>
+
+<text x="80" y="812" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="15" fill="#51606f">25 tasks · 467 assertions · 3 suites · zero runtime dependencies · every answer kept</text>
+<text x="1520" y="812" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="15" fill="#8b9aab">github.com/1313hati/modelbench</text>
+</svg>

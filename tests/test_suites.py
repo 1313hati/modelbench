@@ -5,7 +5,7 @@ from modelbench.tasks import PACKAGED_SUITES, available_suites, payload_files, r
 
 def test_packaged_suites_are_structurally_valid():
     suites = available_suites()
-    assert {s.id for s in suites} == {"core-v1", "core-v2"}
+    assert {s.id for s in suites} == {"core-v1", "core-v2", "work-v1"}
     for suite in suites:
         assert suite.problems() == [], suite.problems()
         assert suite.tasks

@@ -1,0 +1,12 @@
+REGION   PRODUCT           UNITS      REVENUE   SHARE
+-----------------------------------------------------
+North    Widget            1,200   $14,500.50   28.6%
+South    Widget              980   $11,899.99   23.4%
+East     Widget              760    $8,999.95   17.7%
+West     Widget              600    $7,250.00   14.3%
+West     Gadget              410    $3,100.50    6.1%
+North    Gadget              340    $2,250.00    4.4%
+East     Industrial Brac…     88    $1,299.00    2.6%
+Central  Doohickey           220      $999.99    2.0%
+South    Doohickey           150      $450.00    0.9%
+TOTAL                      4,748   $50,749.93  100.0%

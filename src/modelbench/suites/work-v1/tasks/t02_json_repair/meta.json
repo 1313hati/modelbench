@@ -1,0 +1,10 @@
+{
+  "id": "t02_json_repair",
+  "title": "Lenient config reader",
+  "category": "parsing",
+  "kind": "file",
+  "lang": "py",
+  "max_tokens": 6144,
+  "timeout": 120,
+  "checks": 18
+}

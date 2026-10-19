@@ -1,5 +1,51 @@
 # Changelog
 
+## 2.0.0
+
+The release where the benchmark starts reporting its own uncertainty, its cost,
+and the work it was always claiming to be able to score.
+
+- **Every score carries a 95% confidence interval.** `stats.py` bootstraps over
+  **tasks**, the unit the score weights equally, with a fixed seed, so a CI
+  quoted in a pull request still matches the CI regenerated from disk. The
+  headline, markdown, HTML card and JSON all print it. A single-sample run gets
+  no interval at all — `(v, v)` would claim certainty the suite does not have.
+- **A comparison can now conclude "not established".** `pairwise()` gains a
+  bootstrap interval on the mean per-task delta and an exact two-sided sign
+  test. A difference counts only when the interval excludes zero **and** the
+  sign test clears the threshold; when the two disagree, the report says so.
+  Two runs that tie on every common task say that instead of printing `+0.0 pp`.
+- **Cost, counted honestly.** Targets accept `price_input` and `price_output`
+  (USD per 1M tokens). Reports add `estimated cost` and `cost per solved task`,
+  and the console grows a cost column only when something is priced. Token
+  accounting now includes discarded over-cap calls and the feedback turn —
+  counting only the winning attempt understates the bill.
+- **`modelbench card RUN`** writes a 1200×675 SVG scorecard (and a PNG with
+  `--png`, via `rsvg-convert`): score, interval, final score, tok/s, tokens,
+  cost, suite digest, seed, worst-first categories and a per-task sparkline.
+  Self-contained, no external assets, XML-escaped labels.
+- **`modelbench leaderboard runs/*`** ranks the runs on your disk instead of
+  strangers' submissions. Overlapping intervals share a rank (`1=`), `◆` marks
+  the Pareto frontier on score vs token spend, and runs from different suites
+  are refused unless `--allow-mixed`. Writes `reports/LEADERBOARD.md`, or
+  `--json`.
+- **New suite `work-v1` — 4 tasks, 63 assertions, no programming exercises.**
+  A fixed-width report built to a 53-column spec, a lenient reader for a
+  vendor's almost-JSON dialect, a monthly retention query executed against two
+  datasets (so a hardcoded answer fails), and a memo turned into seven
+  commitments with verbatim sources. This is the non-coding proof the README
+  kept promising: the runner needed no new concept.
+- Fixed a duplicated `samples` property on `Run` that silently shadowed the
+  first definition.
+- JSON `pairwise` entries gain `gap_pp` and `gap_ci_pp`, oriented towards the
+  leader, next to the signed `mean_delta_pp` / `delta_ci_pp` (which stay `a - b`).
+  Markdown, HTML and console prose now use the oriented pair, so a leader listed
+  second no longer prints "+7.2 pp" beside a delta of -7.2.
+- The significance branch no longer appends the crude run-to-run noise clause
+  when the interval is already tighter than the per-task swing; it says that
+  individual tasks can swing more than the gap while its direction holds.
+- 78 -> 97 tests; 404 -> 467 reference assertions across three suites.
+
 ## 1.4.1
 
 - The headline table states `samples / task`. A report read out of context should

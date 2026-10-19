@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from . import __version__
+from .stats import bootstrap_mean_ci, fmt_p, paired_delta
 from .util import (
     column_table,
     int_fmt,
@@ -43,14 +44,6 @@ class Run:
     header: dict
     records: list[dict]
 
-    @property
-    def samples(self) -> int:
-        """Most samples any one task carries here (0 when the run is empty)."""
-        counts: dict[str, int] = {}
-        for record in self.records:
-            task = str(record.get("task"))
-            counts[task] = max(counts.get(task, 0), int(record.get("sample") or 1))
-        return max(counts.values()) if counts else 0
     @property
     def tasks(self) -> list[str]:
         listed = (self.header.get("suite") or {}).get("tasks")
@@ -194,14 +187,38 @@ def task_map(records: Sequence[dict]) -> dict[str, list[dict]]:
     return out
 
 
-def total_tokens(record: dict) -> int:
-    total = 0
+def token_usage(record: dict) -> tuple[int, int]:
+    """(prompt, completion) tokens this record cost, retries and repairs included.
+
+    Counting only the winning attempt understates the bill: a cap retry and a
+    feedback turn are paid for whether or not they scored.
+    """
+    prompt = completion = 0
     for key in ("first", "repair"):
         attempt = record.get(key) or {}
-        total += int(attempt.get("completion_tokens") or 0)
+        prompt += int(attempt.get("prompt_tokens") or 0)
+        completion += int(attempt.get("completion_tokens") or 0)
         for extra in attempt.get("discarded_calls") or []:
-            total += int(extra.get("completion_tokens") or 0)
-    return total
+            prompt += int(extra.get("prompt_tokens") or 0)
+            completion += int(extra.get("completion_tokens") or 0)
+    return prompt, completion
+
+
+def total_tokens(record: dict) -> int:
+    return token_usage(record)[1]
+
+
+def pricing(run: "Run") -> dict | None:
+    """Per-Mtok prices recorded with the run, if the target declared any."""
+    header = (run.header.get("target") or {}).get("pricing") or {}
+    record = run.records[0].get("pricing") or {} if run.records else {}
+    merged = {**record, **header}
+    if merged.get("input_per_mtok") is None and merged.get("output_per_mtok") is None:
+        return None
+    return {
+        "input_per_mtok": float(merged.get("input_per_mtok") or 0.0),
+        "output_per_mtok": float(merged.get("output_per_mtok") or 0.0),
+    }
 
 
 def run_metrics(run: Run) -> dict:
@@ -228,6 +245,21 @@ def run_metrics(run: Run) -> dict:
     per_task_scores = {task: [r["first"]["score"] for r in recs] for task, recs in per_task.items()}
     spreads = [max(v) - min(v) for v in per_task_scores.values() if len(v) > 1]
     unstable = sorted(t for t, v in per_task_scores.items() if len(v) > 1 and (max(v) - min(v)) > 1e-9)
+    first_ci = bootstrap_mean_ci(first_task_means)
+    final_ci = bootstrap_mean_ci(final_task_means)
+    usage = [token_usage(r) for r in records]
+    input_tokens = sum(u[0] for u in usage)
+    output_tokens = sum(u[1] for u in usage)
+    price = pricing(run)
+    cost = None
+    cost_per_solved = None
+    if price is not None:
+        cost = (
+            input_tokens / 1_000_000 * price["input_per_mtok"]
+            + output_tokens / 1_000_000 * price["output_per_mtok"]
+        )
+        solved_count = sum(1 for r in records if r.get("final_solved"))
+        cost_per_solved = cost / solved_count if solved_count else None
     return {
         "records": len(records),
         "tasks": len(per_task),
@@ -237,8 +269,10 @@ def run_metrics(run: Run) -> dict:
         "duplicates": duplicate_pairs(records),
         "first_score": mean(first_task_means),
         "first_sd": stdev(first_task_means),
+        "first_ci": first_ci,
         "final_score": mean(final_task_means),
         "final_sd": stdev(final_task_means),
+        "final_ci": final_ci,
         "assertions_passed": passed,
         "assertions_total": assertions,
         "assertion_rate": (passed / assertions) if assertions else 0.0,
@@ -252,7 +286,11 @@ def run_metrics(run: Run) -> dict:
         "median_tps": median(tps),
         "median_ttft": median(ttfts) if ttfts else None,
         "median_tokens": median(tokens) if tokens else None,
-        "total_tokens": sum(total_tokens(r) for r in records),
+        "total_tokens": output_tokens,
+        "input_tokens": input_tokens,
+        "pricing": price,
+        "cost_usd": cost,
+        "cost_per_solved_usd": cost_per_solved,
         "wall_s": sum(r.get("wall_s") or 0.0 for r in records),
         "truncated": sum(1 for r in records if r["first"].get("finish_reason") == "length"),
         "no_result": sum(1 for r in records if r["first"].get("no_result_line")),
@@ -379,10 +417,42 @@ class Pairwise:
     # Fewest samples any one task carries in either run. The noise estimate is
     # only as good as this number: two samples give a two-point range.
     samples_min: int = 0
+    # Bootstrap interval for the mean per-task delta, and the exact sign-test
+    # p-value over the tasks that were not tied. A gap can clear the noise
+    # threshold and still fail the sign test; both have to hold.
+    delta_ci: tuple[float, float] | None = None
+    p_value: float = 1.0
+    significant: bool = False
 
     def provisional(self, require: int = 3) -> bool:
         """True when the evidence is too thin to separate close models."""
         return 0 < self.samples_min < require
+
+    @property
+    def identical(self) -> bool:
+        """Same score on every common task — there is no gap to test."""
+        return bool(self.common) and self.wins_a == 0 and self.wins_b == 0
+
+    @property
+    def gap_pp(self) -> float:
+        """Per-task gap oriented towards the leader, always non-negative.
+
+        ``mean_delta_pp`` is signed ``a - b`` because that is what the maths
+        produces. Prose is written about the leader, so it uses this instead —
+        otherwise a report on a run ordered b, a prints "+7.2 pp" next to a
+        delta of -7.2.
+        """
+        return abs(self.mean_delta_pp)
+
+    @property
+    def gap_ci(self) -> tuple[float, float] | None:
+        """``delta_ci`` flipped into the leader's orientation, low bound first."""
+        if not self.delta_ci:
+            return None
+        low, high = self.delta_ci
+        if self.mean_delta_pp < 0:
+            low, high = -high, -low
+        return (min(low, high), max(low, high))
 
 
 def task_spread_pp(run: "Run", task: str) -> float | None:
@@ -432,6 +502,8 @@ def pairwise(a: Run, b: Run) -> Pairwise:
                 "within_noise": task_noise is not None and task_noise > 0 and abs(delta) <= task_noise,
             }
         )
+    deltas = [r["delta_pp"] for r in rows]
+    test = paired_delta(deltas, wins_a, wins_b, ties)
     return Pairwise(
         a=a.label,
         b=b.label,
@@ -439,11 +511,14 @@ def pairwise(a: Run, b: Run) -> Pairwise:
         wins_a=wins_a,
         wins_b=wins_b,
         ties=ties,
-        mean_delta_pp=mean([r["delta_pp"] for r in rows]) if rows else 0.0,
+        mean_delta_pp=mean(deltas) if deltas else 0.0,
         rows=rows,
         noise_pp=mean(spreads) if spreads else 0.0,
-        decisive=abs(mean([r["delta_pp"] for r in rows]) if rows else 0.0) > (mean(spreads) if spreads else 0.0),
+        decisive=abs(mean(deltas) if deltas else 0.0) > (mean(spreads) if spreads else 0.0),
         samples_min=min(counts) if counts else 0,
+        delta_ci=test["ci_pp"],
+        p_value=test["p_value"],
+        significant=test["significant"],
     )
 
 
@@ -461,12 +536,36 @@ def _count(n: int, word: str) -> str:
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
 
 
+def ci_pct(ci: tuple[float, float] | None) -> str:
+    """A 0–1 interval as percentages: ``92.1–96.3%``.
+
+    CIs live in score units so the maths stays in one place; a report prints
+    them in the same unit as the score it sits next to.
+    """
+    if not ci:
+        return MISSING
+    return f"{ci[0] * 100:.1f}–{ci[1] * 100:.1f}%"
+
+
+def _usd(value: float | None) -> str:
+    if value is None:
+        return MISSING
+    if value == 0:
+        return "$0"
+    if value < 0.01:
+        return f"${value:.4f}"
+    if value < 10:
+        return f"${value:.2f}"
+    return f"${value:,.2f}"
+
+
 def headline_rows(runs: Sequence[Run], metrics: Sequence[dict]) -> list[tuple[str, list[str]]]:
     """The headline table, shared by the markdown and HTML reports."""
-    return [
+    rows = [
         ("records / expected", [f"{m['records']} / {m['expected']}" for m in metrics]),
         ("samples / task", [str(run.samples) for run in runs]),
         ("mean task score, first", [pct(m["first_score"]) for m in metrics]),
+        ("95% CI, first · final", [f"{ci_pct(m['first_ci'])} · {ci_pct(m['final_ci'])}" for m in metrics]),
         ("mean task score, final", [pct(m["final_score"]) for m in metrics]),
         (
             "first-attempt assertions",
@@ -489,7 +588,10 @@ def headline_rows(runs: Sequence[Run], metrics: Sequence[dict]) -> list[tuple[st
         ("median call wall", [f"{m['median_call_s']:.1f}s" for m in metrics]),
         ("p90 call wall", [f"{m['p90_call_s']:.1f}s" for m in metrics]),
         ("median output tokens / call", [int_fmt(m["median_tokens"]) for m in metrics]),
+        ("prompt tokens, total", [f"{m['input_tokens']:,}" if m["input_tokens"] else MISSING for m in metrics]),
         ("completion tokens, total", [f"{m['total_tokens']:,}" for m in metrics]),
+        ("estimated cost", [_usd(m["cost_usd"]) for m in metrics]),
+        ("cost per solved attempt", [_usd(m["cost_per_solved_usd"]) for m in metrics]),
         ("tokens per solved task", [
             int_fmt(m["total_tokens"] / solved) if (solved := sum(1 for r in run.records if r.get("final_solved"))) else MISSING
             for m, run in zip(metrics, runs)
@@ -499,6 +601,9 @@ def headline_rows(runs: Sequence[Run], metrics: Sequence[dict]) -> list[tuple[st
         ("median TTFT", [f"{m['median_ttft']:.2f}s" if m["median_ttft"] else MISSING for m in metrics]),
         ("answers cut by token cap", [str(m["truncated"]) for m in metrics]),
     ]
+    # A local target has no prices; printing four rows of em dashes buries the
+    # numbers that do exist. Drop a row only when no run can fill it.
+    return [row for row in rows if any(cell != MISSING for cell in row[1])]
 
 
 def render_markdown(
@@ -547,23 +652,61 @@ def render_markdown(
         else:
             line += "."
         lines += [line, ""]
-        if pair and len(runs) == 2 and pair.noise_pp > 0:
-            sign = 1 if pair.a == labels[lead[0]] else -1
-            gap = pair.mean_delta_pp * sign
-            if pair.decisive:
+        if pair and pair.identical:
+            lines += [
+                f"Both runs score identically on all {len(pair.common)} common tasks; there is no "
+                "gap to test. That is a statement about this suite, not about the models.",
+                "",
+            ]
+        elif pair and len(runs) == 2:
+            gap = pair.gap_pp
+            ci = pair.gap_ci
+            ci_text = f"{_signed_pp(ci[0])} to {_signed_pp(ci[1])} pp" if ci else "no interval"
+            evidence = (
+                f"95% CI {ci_text}, two-sided sign test {fmt_p(pair.p_value)} over "
+                f"{pair.wins_a + pair.wins_b} decided task{'s' if pair.wins_a + pair.wins_b != 1 else ''}"
+            )
+            noise_clause = (
+                f", against ±{pair.noise_pp:.1f} pp of run-to-run noise"
+                if pair.noise_pp > 0
+                else ""
+            )
+            if pair.significant:
+                swing = (
+                    f" Individual tasks still swing ±{pair.noise_pp:.1f} pp between samples — more "
+                    "than the gap itself — but the direction of the gap is what holds."
+                    if pair.noise_pp > gap
+                    else ""
+                )
                 lines += [
-                    f"Gap: **{_signed_pp(gap)} pp** mean per-task, against "
-                    f"**±{pair.noise_pp:.1f} pp** of run-to-run noise (the same task's score "
-                    "moving between samples).",
+                    f"Gap: **{_signed_pp(gap)} pp** mean per-task ({evidence}). The interval "
+                    "excludes zero and the sign test agrees, so the ordering holds across the "
+                    f"suite rather than resting on one heavy task.{swing}",
+                    "",
+                ]
+            elif pair.decisive and pair.noise_pp > 0:
+                lines += [
+                    f"**The mean gap clears the noise, but not the sign test.** Difference is "
+                    f"{_signed_pp(gap)} pp mean per-task ({evidence}); the tasks move by "
+                    f"±{pair.noise_pp:.1f} pp between samples. A few large wins are carrying the "
+                    "mean while the suite as a whole is close — read the per-task table before "
+                    "quoting a winner.",
+                    "",
+                ]
+            elif pair.noise_pp > 0:
+                lines += [
+                    f"**The gap is inside the noise.** Mean per-task difference is "
+                    f"{_signed_pp(gap)} pp ({evidence}), and the same tasks move by "
+                    f"±{pair.noise_pp:.1f} pp between samples of one run. At this sample size "
+                    "the suite cannot separate these two; raise `--samples` (and keep the seed "
+                    "pinned) before quoting a winner.",
                     "",
                 ]
             else:
                 lines += [
-                    f"**The gap is inside the noise.** Mean per-task difference is "
-                    f"{_signed_pp(gap)} pp, and the same tasks move by ±{pair.noise_pp:.1f} pp "
-                    "between samples of one run. At this sample size the suite cannot separate "
-                    "these two; raise `--samples` (and keep the seed pinned) before quoting a "
-                    "winner.",
+                    f"**Not established.** Mean per-task difference is {_signed_pp(gap)} pp "
+                    f"({evidence}). The suite cannot separate these two at this sample size; "
+                    "raise `--samples` (and keep the seed pinned) before quoting a winner.",
                     "",
                 ]
 
@@ -621,6 +764,19 @@ def render_markdown(
     rows: list[tuple[str, list[str]]] = headline_rows(runs, metrics)
     for label, cells in rows:
         lines.append(f"| {label} | " + " | ".join(cells) + " |")
+    if any(m["cost_usd"] is not None for m in metrics):
+        prices = "; ".join(
+            f"**{run.label}** ${m['pricing']['input_per_mtok']:.2f} in / "
+            f"${m['pricing']['output_per_mtok']:.2f} out per Mtok"
+            for run, m in zip(runs, metrics)
+            if m["pricing"]
+        )
+        lines += [
+            "",
+            f"Cost is estimated from the prices recorded with each run ({prices}) and counts "
+            "every prompt, every completion, the feedback turn and any discarded cap retry. "
+            "It is the bill, not the list price of one call.",
+        ]
 
     # -- per task -------------------------------------------------------- #
     per_task = [per_task_metrics(run) for run in runs]
@@ -652,10 +808,17 @@ def render_markdown(
             lines.append(f"| {task} | {category} | " + " | ".join(cells) + f" | {delta} | {winner} |")
         if pairs:
             pair = pairs[0]
+            ci = pair.delta_ci
+            ci_text = (
+                f"95% CI {_signed_pp(ci[0])} to {_signed_pp(ci[1])} pp, "
+                if ci
+                else ""
+            )
             lines += [
                 "",
                 f"Task wins: **{pair.a} {pair.wins_a}**, **{pair.b} {pair.wins_b}**, {pair.ties} ties. "
-                f"Mean per-task delta: {_signed_pp(pair.mean_delta_pp)} pp.",
+                f"Mean per-task delta: {_signed_pp(pair.mean_delta_pp)} pp "
+                f"({ci_text}two-sided sign test {fmt_p(pair.p_value)}).",
             ]
             if any(row.get("within_noise") for row in pair.rows):
                 lines += [
@@ -844,8 +1007,13 @@ def render_json(runs: Sequence[Run], title: str | None = None, require_samples: 
                     "wins_b": pair.wins_b,
                     "ties": pair.ties,
                     "mean_delta_pp": round(pair.mean_delta_pp, 2),
+                    "gap_pp": round(pair.gap_pp, 2),
+                    "gap_ci_pp": [round(v, 2) for v in pair.gap_ci] if pair.gap_ci else None,
                     "noise_pp": round(pair.noise_pp, 2),
                     "decisive": pair.decisive,
+                    "delta_ci_pp": [round(v, 2) for v in pair.delta_ci] if pair.delta_ci else None,
+                    "p_value": round(pair.p_value, 4),
+                    "significant": pair.significant,
                     "samples_per_task": pair.samples_min,
                     "provisional": pair.provisional(require_samples),
                     "tasks": pair.rows,
@@ -1050,7 +1218,14 @@ def render_html(
             gap = (m["first_score"] - metrics[best_index]["first_score"]) * 100
             delta = f"({_signed_pp(gap)} pp vs best)"
         badge = '<span class="badge">best</span>' if index == best_index and len(runs) > 1 else ""
-        sub = "first attempt · leader" if index == best_index and len(runs) > 1 else f"first attempt {delta}"
+        bits = ["first attempt"]
+        if m["first_ci"]:
+            bits.append("95% CI " + ci_pct(m["first_ci"]))
+        if index == best_index and len(runs) > 1:
+            bits.append("leader")
+        elif delta:
+            bits.append(delta.strip("()"))
+        sub = " · ".join(bits)
         cards.append(
             '<article class="card">'
             f'<header><h3>{_esc(run.label)}</h3>{badge}</header>'
@@ -1062,7 +1237,8 @@ def render_html(
             f'<div><dt>records</dt><dd>{m["records"]}/{m["expected"]}</dd></div>'
             f'<div><dt>median decode</dt><dd>{m["median_tps"]:.1f} tok/s</dd></div>'
             f'<div><dt>output tokens</dt><dd>{m["total_tokens"]:,}</dd></div>'
-            f'<div><dt>wall clock</dt><dd>{m["wall_s"] / 60:.1f} min</dd></div>'
+            + (f'<div><dt>cost</dt><dd>{_usd(m["cost_usd"])}</dd></div>' if m["cost_usd"] is not None else "")
+            + f'<div><dt>wall clock</dt><dd>{m["wall_s"] / 60:.1f} min</dd></div>'
             "</dl></article>"
         )
     cards.append("</div></section>")
@@ -1121,26 +1297,46 @@ def render_html(
             f'<tr><td class="task">{_esc(task)}</td><td>{_esc(category)}</td>{cells}{tail}</tr>'
         )
     note = ""
-    if pair:
+    if pair and pair.identical:
+        note = (
+            f'<p class="sub">Both runs score identically on all {len(pair.common)} common tasks; '
+            "there is no gap to test.</p>"
+        )
+    elif pair:
+        ci = pair.gap_ci
+        ci_text = (
+            f" · 95% CI {_signed_pp(ci[0])} to {_signed_pp(ci[1])} pp" if ci else ""
+        )
         note = (
             f'<p class="sub">Task wins: <b>{_esc(pair.a)} {pair.wins_a}</b>, '
             f"<b>{_esc(pair.b)} {pair.wins_b}</b>, {pair.ties} tie(s) · mean per-task delta "
-            f"{_signed_pp(pair.mean_delta_pp)} pp.</p>"
+            f"{_signed_pp(pair.gap_pp)} pp{ci_text} · sign test {fmt_p(pair.p_value)}</p>"
         )
-        if pair.noise_pp > 0:
-            if pair.decisive:
-                note += (
-                    f'<p class="sub">The mean gap is larger than the ±{pair.noise_pp:.1f} pp a '
-                    "task moves between samples of one run.</p>"
-                )
-            else:
-                note = (
-                    '<div class="warn"><b>The gap is inside the noise.</b> '
-                    f"Mean per-task difference is {_signed_pp(pair.mean_delta_pp)} pp while the "
-                    f"same tasks move by ±{pair.noise_pp:.1f} pp between samples of one run. "
-                    "At this sample size the suite cannot separate these two — raise "
-                    "<code>--samples</code> (seed pinned) before quoting a winner.</div>"
-                ) + note
+        if pair.significant:
+            note += (
+                '<p class="sub">The interval excludes zero and the sign test agrees: the '
+                "ordering holds across the suite, not just on one heavy task.</p>"
+            )
+        elif pair.decisive and pair.noise_pp > 0:
+            note = (
+                '<div class="warn"><b>The mean gap clears the noise, but not the sign test.</b> '
+                "A few large wins are carrying the mean while the suite as a whole is close — "
+                "read the per-task table before quoting a winner.</div>"
+            ) + note
+        elif pair.noise_pp > 0:
+            note = (
+                '<div class="warn"><b>The gap is inside the noise.</b> '
+                f"Mean per-task difference is {_signed_pp(pair.mean_delta_pp)} pp while the "
+                f"same tasks move by ±{pair.noise_pp:.1f} pp between samples of one run. "
+                "At this sample size the suite cannot separate these two — raise "
+                "<code>--samples</code> (seed pinned) before quoting a winner.</div>"
+            ) + note
+        else:
+            note = (
+                '<div class="warn"><b>Not established.</b> The interval for the mean per-task '
+                "delta includes zero; at this sample size the suite cannot separate these two."
+                "</div>"
+            ) + note
     parts.append(
         '<section><h2>Per task</h2>'
         f"{note}<table class=\"sortable\"><thead><tr><th data-sort=\"text\">task</th>"
@@ -1308,35 +1504,54 @@ def render_html(
 
 def render_console(runs: Sequence[Run], require_samples: int = 3) -> str:
     metrics = [run_metrics(run) for run in runs]
+    priced = any(m["cost_usd"] is not None for m in metrics)
     rows = []
     for run, m in zip(runs, metrics):
-        rows.append(
-            [
-                run.label,
-                pct(m["first_score"]),
-                pct(m["final_score"]),
-                pct(m["solved_first"]),
-                f"{m['records']}/{m['expected']}",
-                f"{m['median_call_s']:.1f}s",
-                f"{m['median_tps']:.1f}" if m["median_tps"] else MISSING,
-                f"{m['total_tokens']:,}",
-            ]
-        )
+        row = [
+            run.label,
+            pct(m["first_score"]),
+            pct(m["final_score"]),
+            pct(m["solved_first"]),
+            f"{m['records']}/{m['expected']}",
+            f"{m['median_call_s']:.1f}s",
+            f"{m['median_tps']:.1f}" if m["median_tps"] else MISSING,
+            f"{m['total_tokens']:,}",
+        ]
+        if priced:
+            row.append(_usd(m["cost_usd"]))
+        rows.append(row)
+    headers = ["run", "first", "final", "solved", "records", "med call", "tok/s", "tokens"]
+    if priced:
+        headers.append("cost")
     table = column_table(
-        ["run", "first", "final", "solved", "records", "med call", "tok/s", "tokens"],
+        headers,
         rows,
-        align=["l", "r", "r", "r", "r", "r", "r", "r"],
+        align=["l"] + ["r"] * (len(headers) - 1),
     )
     lines = [table]
     if len(runs) == 2:
         pair = pairwise(runs[0], runs[1])
-        verdict = "within noise" if not pair.decisive else "beyond noise"
-        noise = f" ±{pair.noise_pp:.1f} pp" if pair.noise_pp else ""
-        if pair.provisional(require_samples):
-            verdict += f", provisional at {pair.samples_min} sample(s)/task"
+        flags: list[str] = []
+        if pair.identical:
+            flags.append("identical on every common task")
+        else:
+            if pair.significant:
+                flags.append("difference established")
+            elif not pair.decisive and pair.noise_pp > 0:
+                flags.append("gap inside noise")
+            else:
+                flags.append("not established")
+            if pair.provisional(require_samples):
+                flags.append(f"provisional at {pair.samples_min} sample(s)/task")
+        verdict = " · ".join(flags)
+        gap_ci = pair.gap_ci
+        ci = f" · 95% CI {_signed_pp(gap_ci[0])} to {_signed_pp(gap_ci[1])} pp" if gap_ci else ""
+        noise = f" · task spread ±{pair.noise_pp:.1f} pp" if pair.noise_pp else ""
+        ahead = pair.a if pair.mean_delta_pp > 0 else pair.b
         lines.append(
             f"\ntask wins: {pair.a} {pair.wins_a}, {pair.b} {pair.wins_b}, ties {pair.ties} "
-            f"(mean delta {_signed_pp(pair.mean_delta_pp)} pp · {verdict}{noise})"
+            f"(mean gap {_signed_pp(pair.gap_pp)} pp in favour of {ahead}{ci}{noise} · "
+            f"sign test {fmt_p(pair.p_value)} · {verdict})"
         )
     return "\n".join(lines)
 

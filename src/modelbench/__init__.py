@@ -7,7 +7,7 @@ machine years from now.
 
 from __future__ import annotations
 
-__version__ = "1.4.1"
+__version__ = "2.0.0"
 
 #: Version of the record format written to ``results.jsonl``.
 RECORD_VERSION = 2

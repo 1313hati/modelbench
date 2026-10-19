@@ -2,7 +2,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-3776ab">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
   <img alt="runtime deps" src="https://img.shields.io/badge/runtime%20deps-none-lightgrey">
-  <img alt="suites" src="https://img.shields.io/badge/suites-core--v1%20%7C%20core--v2-blueviolet">
+  <img alt="suites" src="https://img.shields.io/badge/suites-core--v1%20%7C%20core--v2%20%7C%20work--v1-blueviolet">
 </p>
 
 ```text
@@ -40,16 +40,17 @@ fixed suite of graded tasks, keeps every answer, and writes a report you can
 defend. Every prompt, raw answer, extracted solution, hidden test and grading
 decision is stored on disk, so a score can be re-checked instead of trusted.
 
-Two coding suites ship today (21 tasks, 404 hidden assertions). The runner is
-task-agnostic — a suite is data, not code — so suites for other kinds of work
-plug into the same commands, records and reports.
+Three suites ship today (25 tasks, 467 hidden assertions): two coding suites
+and one suite of office work, because the runner is task-agnostic — a suite is
+data, not code.
 
 No agent framework, no tool loop, no model-specific glue: one request, one
 answer, one grade, one feedback turn. If model A scores 96% and model B 91%,
 the difference is the model, not the harness.
 
 ```
-21 tasks        404 hidden assertions        one equal-weight score per task
+25 tasks        467 hidden assertions        one equal-weight score per task
+a confidence interval on every score       a price on every solve
 ```
 
 ## Table of contents
@@ -60,6 +61,10 @@ the difference is the model, not the harness.
 - [Configure a target](#configure-a-target)
 - [Run it](#run-it)
 - [Compare models](#compare-models)
+- [Is the gap real?](#is-the-gap-real)
+- [What it costs](#what-it-costs)
+- [Share a scorecard](#share-a-scorecard)
+- [Rank the runs you have](#rank-the-runs-you-have)
 - [What is actually measured](#what-is-actually-measured)
 - [The suites](#the-suites)
 - [Beyond coding](#beyond-coding)
@@ -265,6 +270,91 @@ provisional. `modelbench run --fail-under 0.9` is the other half of a CI gate:
 it benchmarks, writes the report, then exits 1 if the final mean task score is
 below the bar.
 
+## Is the gap real?
+
+A suite score is a mean over a dozen tasks. Printed to one decimal it looks
+like a measurement; in practice one task flipping moves it by eight points. So
+every score now carries a **95% bootstrap confidence interval**, and every
+comparison carries a **paired interval plus an exact sign test**:
+
+```text
+run          first   95% CI, first      final  solved  samples
+----------  ------  ----------------  -------  ------  -------
+local-27b    99.7%  98.9–100.0%        100.0%   91.7%        3
+local-9b     95.1%   92.6–97.4%         97.2%   86.4%        3
+
+task wins: local-27b 4, local-9b 1, ties 7
+mean delta +12.4 pp (95% CI +3.9 to +20.8 pp), two-sided sign test p = 0.375
+difference not established — the interval and the sign test disagree
+```
+
+The interval resamples **tasks** — the unit the score weights equally — with a
+fixed seed, so a CI quoted in a pull request still matches the CI regenerated
+from disk a month later. The comparison uses per-task deltas and a sign test,
+which assumes nothing about how scores are distributed; with twelve tasks a
+t-distribution is a costume, not a measurement.
+
+A gap counts as established only when **both** tests agree: the interval must
+exclude zero *and* the sign test must clear the threshold. When they disagree
+the report says so. When two runs tie on every task it says that too, instead
+of printing a meaningless `+0.0 pp`.
+
+## What it costs
+
+Most benchmarks publish a score and leave you to discover the bill. Add prices
+to a target and the report grows a cost column:
+
+```toml
+[[targets]]
+name = "hosted"
+base_url = "https://api.example.com/v1"
+model = "some-model"
+price_input = 0.15     # USD per 1M prompt tokens
+price_output = 0.60    # USD per 1M completion tokens
+```
+
+```text
+prompt tokens, total   412,880
+estimated cost         $0.41
+cost per solved task   $0.037
+```
+
+Retries, discarded over-cap calls and the feedback turn are all counted,
+because a bill that only counts the winning attempt is fiction. Leave the
+prices out and the column disappears — an unpriced run is not a free one.
+
+## Share a scorecard
+
+A report is for reading. A card is the one image that travels without its
+footnotes:
+
+```bash
+modelbench card runs/local-27b-core-v2-2026-10-19 --title "Qwen3.8-27B" --png
+```
+
+`CARD.svg` and `CARD.png` (1200×675) carry the score, its interval, the final
+score after feedback, tokens/s, tokens, cost, the suite digest and seed, a
+worst-first category breakdown, and a sparkline of every task from worst to
+best. The interval is on the card on purpose: if a number is worth posting, the
+doubt around it is worth posting too. No external fonts or images, so the SVG
+renders anywhere.
+
+## Rank the runs you have
+
+Public leaderboards rank strangers' submissions. This one ranks the directories
+on your disk:
+
+```bash
+modelbench leaderboard runs/*           # writes reports/LEADERBOARD.md
+modelbench leaderboard runs/* --json    # machine-readable
+```
+
+Runs whose intervals overlap **share a rank** (`1=`, `2=`), because with a
+dozen tasks "94.1% vs 94.6%" is a coin landing heads. A `◆` marks the Pareto
+frontier: nobody beats that run on both score and token spend. Mixed suites are
+refused by default — two suites are two scales — and `--allow-mixed` prints the
+warning and ranks anyway.
+
 ## What is actually measured
 
 One **attempt** is one request/response. Its score is
@@ -306,9 +396,9 @@ Other rules that are part of the protocol, not implementation details:
 
 ## The suites
 
-Two suites ship with the package. `core-v2` is the default and the one to use
+Three suites ship with the package. `core-v2` is the default and the one to use
 for comparisons; `core-v1` is short and fast, and mostly useful as a smoke test
-because strong models saturate it.
+because strong models saturate it; `work-v1` is the non-coding proof.
 
 ### core-v2 — 12 tasks, 296 assertions
 
@@ -327,6 +417,24 @@ because strong models saturate it.
 | `t11_varint_protocol` | binary | 8192 | 32 | a zig-zag varint format and its decoder |
 | `t12_ledger_feature` | longcontext | 10240 | 25 | implement two features across an existing package |
 
+### work-v1 — 4 tasks, 63 assertions
+
+The non-coding suite, and the answer to "is this just another code benchmark".
+None of these is a programming exercise in disguise: `t01` is a layout spec to
+the character, `t04` is reading comprehension with exact quotes. All four are
+graded by deterministic checkers, so no judge model is involved.
+
+| task | category | cap | checks | what it asks for |
+|---|---|---|---|---|
+| `t01_fixed_width_report` | instruction | 4096 | 15 | a 53-column sales report, sorted, rounded and truncated to spec |
+| `t02_json_repair` | parsing | 6144 | 18 | a reader for a vendor's almost-JSON dialect, errors included |
+| `t03_sql_cohort` | sql | 3072 | 14 | monthly retention; run against a second, unpublished dataset |
+| `t04_memo_extraction` | extraction | 4096 | 16 | seven commitments out of a memo, with verbatim source sentences |
+
+`t03` is deliberately executed twice, against two datasets, so a query that
+hardcodes the first answer fails the second time. `t02` checks that the module
+does not reach for `json` or `eval` — the point is the parser.
+
 ### core-v1 — 9 tasks, 108 assertions
 
 Shorter single-file tasks (merge intervals, duration parsing, LRU cache, JS
@@ -337,18 +445,20 @@ obvious.
 
 ## Beyond coding
 
-Both suites that ship today are coding suites, because code is the one thing
-that can be graded exactly without a judge model: a hidden test either passes
-or it does not.
+Code is the easiest thing to grade exactly without a judge model: a hidden
+test either passes or it does not. That is why the first two suites are code.
 
-The runner is not code-specific. A suite is a directory of prompts, hidden
-tests and reference answers; `meta.json` only describes caps, categories and
-how to run its grader. The same commands and the same report can therefore
-score anything with a deterministic checker:
+It is not the only thing. `work-v1` ships four tasks of ordinary desk work —
+copy a table into a fixed layout, repair an export, write one retention query,
+turn a memo into commitments — and the runner did not need a new concept to
+score them. A suite is a directory of prompts, hidden tests and reference
+answers; `meta.json` only describes caps, categories and how to run its grader.
+Anything with a deterministic checker fits the same commands and the same
+report:
 
 - **structured output** — exact JSON, schema conformance, strict CSV or SQL;
-- **transformation** — parse this document, normalise that export, produce this table;
-- **instruction following** — format, length and refusal rules checked mechanically;
+- **transformation** — normalise this export, produce that table, extract these records;
+- **instruction following** — width, order, rounding and refusal rules checked mechanically;
 - **retrieval-style answering** — a fixed expected answer compared exactly.
 
 What it will not do is grade open-ended prose. "Which model writes nicer
@@ -376,11 +486,12 @@ fonts, no network access, and it renders the same from disk in five years.
 
 `REPORT.md` has these sections, in this order:
 
-- **Verdict** — one sentence naming the leader and the margin, calculated from
-  first-attempt scores.
-- **Headline** — records vs expected, first/final scores, assertion rate,
-  solved rate, repair behaviour, sample stability, wall time, tokens, tokens
-  per solved task.
+- **Verdict** — one sentence naming the leader and the margin, plus whether the
+  difference is established, inside the noise, or unprovable because both runs
+  scored identically.
+- **Headline** — records vs expected, first/final scores with their 95%
+  intervals, assertion rate, solved rate, repair behaviour, sample stability,
+  wall time, tokens, estimated cost, cost per solved task.
 - **Per task** — the same scores per task with deltas and a task-win count.
   This is where you see *which kind* of work a model is bad at.
 - **Per category** — the same data grouped by category.
@@ -400,6 +511,9 @@ Two lines in the headline deserve a habit:
 - **mean within-task spread** — the average gap between best and worst sample
   of the same task. Under ~5 pp the suite is behaving deterministically for that
   model; above ~20 pp you need more samples before comparing anything.
+- **95% CI, first · final** — the interval a reader should quote instead of the
+  point estimate. With twelve tasks it is usually wide; that width is the
+  benchmark being honest, not the model being uncertain.
 
 The integrity section is the one to read first. A 99% score from a run with six
 missing records is not a 99% score. `modelbench` never silently drops a failed
@@ -666,7 +780,9 @@ useful than the mean.
 - **Language scope.** Python, JavaScript, SQLite. No Rust, Go, C++ or frontend
   tasks yet.
 - **Coarse granularity.** Twelve tasks means one bad task costs ~8 points of
-  suite score. The assertion rate is less jumpy; use both.
+  suite score. That is why every score is printed with its interval: the suite
+  cannot separate models that differ by a point or two, and now says so instead
+  of ranking them by noise.
 - **Caps bias toward brevity.** A very verbose reasoner can be cut off. The
   retry and `finish_reason` accounting make this visible rather than silent.
 - **One grader, one opinion.** Tests are hand-written assertions, not property
@@ -686,10 +802,13 @@ src/modelbench/
   grader.py        runs the hidden tests, parses RESULT
   runner.py        sample × task loop, retries, records
   report.py        metrics, pairwise comparison, markdown/JSON reports
+  stats.py         bootstrap intervals and the exact sign test
+  card.py          the 1200×675 SVG scorecard
+  leaderboard.py   ranks local runs, ties overlapping intervals
   extraction.py    code-fence and ### FILE: extraction
   mockserver.py    reference-answer server used by self-test
   tasklib/harness.py   assertion helpers for graders
-  suites/          core-v1, core-v2
+  suites/          core-v1, core-v2, work-v1
 scripts/make_banner.py   regenerates assets/banner.txt and the JPG
 tests/             pytest: extraction, config, grading, reporting, CLI
 ```
@@ -703,7 +822,8 @@ runs/local-core-v2-20260101-120000/
   s1/raw/<task>.txt   verbatim model output (plus .repair.txt)
   s1/sol/<task>.solution.py
   errors.log          only present when something failed
-  REPORT.md, summary.json
+  REPORT.md, REPORT.html, summary.json
+  CARD.svg            only after `modelbench card`
 ```
 
 ## Development

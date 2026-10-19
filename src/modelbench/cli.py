@@ -6,6 +6,8 @@
     modelbench report runs/a runs/b # compare runs
     modelbench validate             # reference solutions must score 100%
     modelbench self-test            # end-to-end check with a mock model
+    modelbench card RUN             # a shareable SVG scorecard
+    modelbench leaderboard runs/*   # rank runs, with ties and a frontier
 """
 
 from __future__ import annotations
@@ -21,11 +23,18 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import __version__
+from .card import write_card
 from .client import ChatClient, probe
 from .config import Config, Generation, Target, find_config, target_from_cli
 from .explain import failing_records, load as load_explain, render_index, render_record
 from .errors import ModelBenchError, SuiteError, TaskError
 from .grader import grade, runner_available
+from .leaderboard import (
+    load_and_build,
+    render_console as render_leaderboard,
+    render_json as leaderboard_json,
+    render_markdown as render_leaderboard_markdown,
+)
 from .mockserver import start_mock
 from .prompts import SINGLE_WRAPPER, REPAIR_PROMPT, build_prompt
 from .report import (
@@ -476,6 +485,67 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# card
+# --------------------------------------------------------------------------- #
+def cmd_card(args: argparse.Namespace) -> int:
+    run = load_run(args.run)
+    out = Path(args.out).expanduser() if args.out else run.path / "CARD.svg"
+    png: Path | None = None
+    if args.png is not None:
+        png = Path(args.png).expanduser() if args.png else out.with_suffix(".png")
+    try:
+        written = write_card(
+            run,
+            out,
+            title=args.title,
+            subtitle=args.subtitle,
+            footer=args.footer,
+            png=png,
+        )
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"card     {written['svg']}")
+    if written["png"]:
+        print(f"png      {written['png']}")
+    if not args.title:
+        print(
+            f"\nthe label on the card is the run's target name ({run.label!r}); "
+            "use --title to put the model's real name on it"
+        )
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# leaderboard
+# --------------------------------------------------------------------------- #
+def cmd_leaderboard(args: argparse.Namespace) -> int:
+    paths: list[Path] = []
+    for entry in args.paths:
+        candidate = Path(entry).expanduser()
+        if candidate.is_dir() and not (candidate / "results.jsonl").is_file():
+            found = discover_runs(candidate)
+            if found:
+                paths.extend(found)
+                continue
+        paths.append(candidate)
+    if not paths:
+        print("error: no run directories found", file=sys.stderr)
+        return 2
+    payload = load_and_build(paths, by=args.by, allow_mixed=args.allow_mixed)
+    print(render_leaderboard(payload))
+    if args.json:
+        print(dump_json(leaderboard_json(payload)))
+        return 0
+    out = Path(args.out).expanduser() if args.out else Path("reports")
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / "LEADERBOARD.md"
+    path.write_text(render_leaderboard_markdown(payload), encoding="utf-8")
+    print(f"\nleaderboard {path}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # mock
 # --------------------------------------------------------------------------- #
 def cmd_inspect(args: argparse.Namespace) -> int:
@@ -821,6 +891,33 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--api-key-env")
     p.add_argument("--no-probe", dest="probe", action="store_false", default=True)
     p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser("card", help="render a run as a shareable SVG/PNG scorecard")
+    p.add_argument("run", help="run directory (the one holding results.jsonl)")
+    p.add_argument("--out", default=None, help="SVG path (default: <run>/CARD.svg)")
+    p.add_argument(
+        "--png",
+        nargs="?",
+        const="",
+        default=None,
+        help="also write a PNG (default: beside the SVG); needs rsvg-convert",
+    )
+    p.add_argument("--title", default=None, help="label on the card (default: the run's target name)")
+    p.add_argument("--subtitle", default=None)
+    p.add_argument("--footer", default=None, help="override the provenance footer")
+    p.set_defaults(func=cmd_card)
+
+    p = sub.add_parser("leaderboard", help="rank several runs; overlapping intervals share a place")
+    p.add_argument("paths", nargs="+", help="run directories (or directories holding runs)")
+    p.add_argument("--by", choices=["first", "final"], default="first", help="which score to rank")
+    p.add_argument("--out", default=None, help="where LEADERBOARD.md goes (default: reports/)")
+    p.add_argument(
+        "--allow-mixed",
+        action="store_true",
+        help="rank runs from different suites or suite versions anyway (adds a warning)",
+    )
+    p.add_argument("--json", action="store_true", help="print the ranking as JSON")
+    p.set_defaults(func=cmd_leaderboard)
 
     p = sub.add_parser("mock", help="serve reference answers from a fake OpenAI endpoint")
     add_common(p)

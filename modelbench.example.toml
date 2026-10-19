@@ -69,6 +69,7 @@ timeout_s = 900
 [targets.ollama]
 base_url = "http://127.0.0.1:11434/v1"
 model = "qwen2.5-coder:7b"
+# A local model costs electricity, not tokens: leave prices unset.
 
 
 # --------------------------------------------------------------------------- #
@@ -81,6 +82,11 @@ api_key_env = "OPENAI_API_KEY"
 temperature = 0.2               # per-target override of [defaults]
 connect_timeout_s = 15
 max_retries = 3
+# Optional prices, USD per 1M tokens. Set both and reports gain
+# "estimated cost" and "cost per solved task"; leave them out and the
+# cost column disappears rather than showing $0.
+price_input = 0.40
+price_output = 1.60
 
 # Hosted providers reject unknown sampling keys, so leave top_k/min_p unset.
 # Extra JSON merged into every request body (provider-specific knobs):

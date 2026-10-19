@@ -56,6 +56,20 @@ def test_pairwise_delta_and_task_wins(run_dir, record):
     assert round(pair.mean_delta_pp, 1) == 0.0
 
 
+def test_gap_is_oriented_towards_the_leader(run_dir, record):
+    # a is weaker; prose talks about the leader, so the gap must read positive
+    # and the interval must be low-bound first, not the raw a-b interval.
+    weak = load_run(run_dir("weak", [record("a", 1, 0.5), record("b", 1, 0.6)]))
+    strong = load_run(run_dir("strong", [record("a", 1, 0.9), record("b", 1, 0.8)]))
+    pair = pairwise(weak, strong)
+    assert round(pair.mean_delta_pp, 1) == -30.0
+    assert round(pair.gap_pp, 1) == 30.0
+    low, high = pair.gap_ci
+    assert low <= pair.gap_pp <= high
+    console = render_console([weak, strong])
+    assert "in favour of strong" in console
+
+
 def test_per_task_metrics_groups_samples(run_dir, record):
     run = load_run(run_dir("model-a", [record("a", 1, 1.0), record("a", 2, 0.5, False)]))
     tasks = per_task_metrics(run)
@@ -217,7 +231,7 @@ def test_pairwise_knows_when_the_gap_is_noise(run_dir, record):
     assert "The gap is inside the noise" in md
     assert "≈" in md
     assert 'class="warn"' in render_html(runs)
-    assert "within noise" in render_console(runs)
+    assert "gap inside noise" in render_console(runs)
 
 
 def test_pairwise_is_decisive_when_samples_agree(run_dir, record):

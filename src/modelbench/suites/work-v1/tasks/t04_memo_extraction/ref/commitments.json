@@ -1,0 +1,44 @@
+[
+  {
+    "owner": "Priya",
+    "due": "2025-11-14",
+    "amount_usd": null,
+    "source": "Priya will send the revised pricing sheet to the sales team by 14 November."
+  },
+  {
+    "owner": "Marcus",
+    "due": "2025-11-21",
+    "amount_usd": 4800,
+    "source": "Marcus committed to booking the Berlin venue by Friday 21 November, with a budget of $4,800."
+  },
+  {
+    "owner": "Legal",
+    "due": "2025-11-30",
+    "amount_usd": null,
+    "source": "Legal must return the data-processing addendum before the end of November."
+  },
+  {
+    "owner": "Ana",
+    "due": "2025-12-01",
+    "amount_usd": null,
+    "source": "The support rotation moves to Ana on 1 December."
+  },
+  {
+    "owner": "Tom",
+    "due": "2025-12-05",
+    "amount_usd": null,
+    "source": "Tom will draft the incident review by 5 December and circulate it to the board."
+  },
+  {
+    "owner": "Finance",
+    "due": "2025-12-12",
+    "amount_usd": null,
+    "source": "Finance will reconcile the Q3 rebates by 12 December."
+  },
+  {
+    "owner": "Elena",
+    "due": "2026-01-31",
+    "amount_usd": 12500,
+    "source": "Elena is to renew the SOC 2 certificate by 31 January 2026; the renewal quote is $12,500."
+  }
+]

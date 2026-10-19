@@ -1,0 +1,10 @@
+{
+  "id": "t01_fixed_width_report",
+  "title": "Fixed-width sales report",
+  "category": "instruction",
+  "kind": "file",
+  "lang": "txt",
+  "max_tokens": 4096,
+  "timeout": 60,
+  "checks": 15
+}
