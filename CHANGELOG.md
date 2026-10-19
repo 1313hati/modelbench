@@ -44,7 +44,14 @@ and the work it was always claiming to be able to score.
 - The significance branch no longer appends the crude run-to-run noise clause
   when the interval is already tighter than the per-task swing; it says that
   individual tasks can swing more than the gap while its direction holds.
-- 78 -> 97 tests; 404 -> 467 reference assertions across three suites.
+- An all-identical sample (every task the same score) returns a zero-width
+  interval deterministically instead of a bootstrap mean that lands one ulp
+  off on 3.11, where `sum()` is not compensated — `(0.9, 0.9)` on every
+  interpreter, not `0.9000000000000002` on some.
+- CI: the matrix now also runs 3.14, `work-v1` is validated and self-tested
+  alongside the other two suites, and the actions are on v7 (Node 20 runtime
+  deprecation).
+- 78 -> 98 tests; 404 -> 467 reference assertions across three suites.
 
 ## 1.4.1
 

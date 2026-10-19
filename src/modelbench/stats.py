@@ -36,12 +36,21 @@ def bootstrap_mean_ci(
 
     ``None`` when there is nothing to estimate from. A single observation has
     no interval: returning ``(v, v)`` would claim certainty we do not have.
+    Identical observations do get ``(v, v)`` — the interval is genuinely zero
+    width, which is different from pretending a sample of one is precise.
     """
     clean = [float(v) for v in values if v is not None]
     if not clean:
         return None
     if len(clean) == 1 or iterations <= 0:
         return None
+    first = clean[0]
+    if all(v == first for v in clean):
+        # A degenerate sample has a degenerate interval. Taking the resampling
+        # path would work, but float summation adds an ulp on 3.11 (3.12's
+        # compensated `sum` hides it), so an all-0.9 run would report
+        # 0.9000000000000002 and fail an exact comparison.
+        return (first, first)
     rng = random.Random(seed)
     n = len(clean)
     means = []

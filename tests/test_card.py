@@ -27,6 +27,13 @@ def test_single_sample_says_so(run_dir, record):
     assert "single sample" in render_card(run)
 
 
+def test_unpriced_run_does_not_show_a_price(run_dir, record):
+    # A local model is not free, it is unpriced; printing $0 would read as a
+    # measurement. The stat row is suppressed instead.
+    run = load_run(run_dir("local", [record("t01", 1, 1.0), record("t02", 1, 1.0)]))
+    assert "$" not in render_card(run)
+
+
 def test_write_card_produces_a_file(tmp_path, run_dir, record):
     run = load_run(run_dir("model-a", [record("t01", 1, 1.0), record("t02", 1, 0.5)]))
     written = write_card(run, tmp_path / "card.svg")
