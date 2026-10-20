@@ -1,0 +1,13 @@
+{
+  "eyebrow": "MODELBENCH 2.2.0  ·  RELEASE PLATE",
+  "headline": "Scores that mean the same thing",
+  "subhead": "A crash cannot shrink the denominator, and an empty answer is no longer filed as bad code.",
+  "tiles": [
+    ["6 / 47", "Declared checks are the floor", "a grader that stops early scores what it reached"],
+    ["131,072", "The window is discovered", "/props or /v1/models, then every cap is clamped"],
+    ["CORE / STRETCH", "One suite, any model size", "--tier core for the 8k laptop model"],
+    ["5 VERDICTS", "Failure is classified", "ok · empty · unparseable · crash · truncated"],
+    ["122", "Tests green on 3.11-3.14", "validate refuses a drifting denominator"],
+    ["2.2.0", "Published scores unchanged", "90.2% and 89.0% re-derived under the new divisor"]
+  ]
+}
