@@ -34,11 +34,19 @@ class GradeResult:
     no_result_line: bool = False
     runner: str = ""
     command: list[str] = field(default_factory=list)
+    # The denominator a grader *reached* can be smaller than the task's declared
+    # check count when a failure skips a block of checks. Scoring on the reached
+    # count would reward a model for failing early, so the declared count is the
+    # floor: checks that were never run count as failed.
+    reported_total: int = 0
+    checks_declared: int = 0
 
     def to_record(self) -> dict:
         return {
             "passed": self.passed,
             "total": self.total,
+            "reported_total": self.reported_total,
+            "checks_declared": self.checks_declared,
             "score": round(self.score, 4),
             "solved": self.solved,
             "exit": self.exit_code,
@@ -96,10 +104,13 @@ def grade(task: Task, solution: Path) -> GradeResult:
 
     matches = RESULT_RE.findall(output)
     no_result = not matches
-    if matches:
-        passed, total = int(matches[-1][0]), int(matches[-1][1])
-    else:
-        passed, total = 0, task.checks or 1
+    reported_total = int(matches[-1][1]) if matches else 0
+    passed = int(matches[-1][0]) if matches else 0
+    declared = task.checks
+    # Never let a grader shrink its own denominator: if it stopped after 6 of
+    # the declared 47 checks, the other 41 are failures, not "not applicable".
+    total = max(reported_total, declared) or 1
+    passed = min(passed, total)
 
     failures = [
         line.strip()[5:].strip()
@@ -121,4 +132,6 @@ def grade(task: Task, solution: Path) -> GradeResult:
         no_result_line=no_result,
         runner=runner,
         command=command,
+        reported_total=reported_total,
+        checks_declared=declared,
     )

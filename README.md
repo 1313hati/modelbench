@@ -161,6 +161,7 @@ Ollama and a hosted API. The keys that matter most:
 | `api_key` / `api_key_env` | literal key, or the name of an env var holding it (preferred) |
 | `temperature`, `top_p`, `top_k`, `min_p`, `seed` | sampling; **keep identical across models you compare**. `seed` is pinned to 42 by default |
 | `max_tokens`, `retry_cap` | fallback cap, and the cap used for the one retry after `finish_reason=length` |
+| `context` | the model's context window. Omit it and the runner asks `/props` (llama.cpp) or `/v1/models`; answers are then clamped so prompt + completion always fit |
 | `timeout_s`, `connect_timeout_s`, `max_retries` | HTTP behaviour |
 | `headers`, `extra_body` | provider-specific additions merged into the request |
 | `start_cmd`, `stop_cmd` | optional shell commands to boot a local server; `{port}` is substituted |
@@ -729,10 +730,12 @@ or pass `--suite ./path` directly.
 | `category` | `misc` | grouping in the report |
 | `kind` | `file` (or `repo` when `files/` exists) | single-file answer, or a workspace of files |
 | `lang` | grader extension | `py`, `js`, `sql`, ... determines the expected file type |
-| `max_tokens` | 8192 | per-task cap |
+| `max_tokens` | 8192 | per-task cap, clamped down when the model's context cannot hold it |
 | `retry_cap` | target default | override for the retry after `length` |
 | `timeout` | 180 | seconds before the grader is killed |
-| `checks` | required | expected assertion count, used when a grader crashes |
+| `checks` | required | the assertion count for this task. It is the **floor** of the denominator, and `modelbench validate` fails unless the reference solution reaches exactly this many checks |
+| `tier` | `core` | `core` or `stretch`; `--tier core` runs a subset a small model can finish |
+| `min_ctx` | 0 | context tokens the task needs at all; tasks above the model's window are skipped with a warning instead of failing obscurely |
 | `test` | auto-detected | explicit path to the grader script |
 | `runner` | inferred from extension | `python`, `node` or `bash` |
 
@@ -748,6 +751,7 @@ RESULT <passed>/<total>
 Failures are printed as `FAIL <name>: <message>`; those lines — and only those —
 are what the model sees in a repair turn. Individual checks must not abort the
 grader: a crash in one assertion should cost one point, not the whole task.
+
 `modelbench.tasklib.harness` provides that:
 
 ```python
@@ -759,6 +763,11 @@ C.eq("handles negative", mod.f(-3), 3)
 C.check("raises on empty", lambda: mod.f(""))
 C.report()                                  # prints RESULT p/t
 ```
+
+The denominator is the task's declared `checks`, not whatever number the grader
+reached. A grader that dies after six of forty-seven checks scores 6/47, not
+6/6: a crash may never shrink the denominator, because that would reward a
+model for failing early and make two models' scores incomparable.
 
 Grader scripts run with the task directory as the working directory and
 `modelbench/tasklib` on `PYTHONPATH`, so `from harness import Checks` works
@@ -794,6 +803,26 @@ real model.
 `modelbench mock` exposes the same server on a port if you want to poke at it
 with `curl` or test a client of your own.
 
+## One suite, any model size
+
+The same 12 tasks should be runnable on a 4B model with an 8k window and a 70B
+model with 128k. Three mechanisms make that true:
+
+- **Context discovery.** The runner asks `/props` (llama.cpp) or `/v1/models`
+  (vLLM and friends) for the loaded window; `context = 32768` in the config
+  overrides it. A run records what it found in `run.json`.
+- **Budget clamping.** Every answer cap is lowered to fit the remaining window,
+  so a small model gets a smaller answer instead of an HTTP 400. A task whose
+  prompt cannot fit at all is skipped with a warning, not graded as a failure.
+- **Tiers.** Tasks carry `tier = core|stretch`. `--tier core` runs only the half
+  a small model can finish; the report prints a score per tier when a run mixes
+  them, so a 40% overall and a 65% core score are both visible.
+
+Each attempt also carries a `protocol` verdict — `ok`, `empty_answer`,
+`unparseable`, `grader_crash` or `truncated`. The score alone cannot tell "wrote
+the wrong function" from "never produced a gradeable answer"; the verdict can,
+and the report counts them next to the score.
+
 ## Fairness checklist
 
 Before publishing a comparison, confirm:
@@ -803,7 +832,8 @@ Before publishing a comparison, confirm:
 - [ ] the suite **digest** in each report matches;
 - [ ] `records / expected` is complete for every run, or the gap is stated;
 - [ ] samples ≥ 2, ideally 3, when the gap between models is under ~3 points;
-- [ ] local servers ran with the same context size and the same reasoning mode;
+- [ ] local servers ran with the same context size (or the difference is stated) and the same reasoning mode;
+- [ ] `protocol failures` is explained: an `empty_answer` row is a format result, not a coding one;
 - [ ] no model was given extra turns, tools, or a different prompt wrapper;
 - [ ] the endpoint reported no truncation (`answers cut by token cap`).
 

@@ -94,3 +94,49 @@ oops = True
     assert written == 1
     assert (workspace / "pkg" / "core.py").read_text().strip() == "VALUE = 1"
     assert not (tmp_path / "escaped.py").exists()
+
+
+def test_declared_checks_are_the_floor_when_a_grader_stops_early(tmp_path, task_factory):
+    # A failure that skips a block of checks must not shrink the denominator:
+    # 3/5 declared, grader only reached 2 checks.
+    task = _task(
+        tmp_path,
+        task_factory,
+        meta={"id": "t_double", "category": "test", "kind": "file", "lang": "py",
+              "max_tokens": 512, "timeout": 30, "checks": 5},
+        test="print('RESULT 1/2')\n",
+    )
+    solution = tmp_path / "anything.py"
+    solution.write_text("x = 1\n", encoding="utf-8")
+    graded = grade(task, solution)
+    assert (graded.passed, graded.total) == (1, 5)
+    assert graded.reported_total == 2
+    assert graded.checks_declared == 5
+    assert graded.score == 0.2
+
+
+def test_a_grader_may_report_more_checks_than_declared(tmp_path, task_factory):
+    # The declared count is a floor, not a ceiling: a grader that grows new
+    # checks stays honest, the reference validation will flag the drift.
+    task = _task(tmp_path, task_factory, test="print('RESULT 4/4')\n")
+    solution = tmp_path / "anything.py"
+    solution.write_text("x = 1\n", encoding="utf-8")
+    graded = grade(task, solution)
+    assert (graded.passed, graded.total) == (4, 4)
+    assert graded.checks_declared == 2
+
+
+def test_missing_result_line_uses_the_declared_denominator(tmp_path, task_factory):
+    task = _task(
+        tmp_path,
+        task_factory,
+        meta={"id": "t_double", "category": "test", "kind": "file", "lang": "py",
+              "max_tokens": 512, "timeout": 30, "checks": 7},
+        test="raise SystemExit(0)\n",
+    )
+    solution = tmp_path / "anything.py"
+    solution.write_text("x = 1\n", encoding="utf-8")
+    graded = grade(task, solution)
+    assert graded.no_result_line is True
+    assert (graded.passed, graded.total) == (0, 7)
+    assert graded.reported_total == 0

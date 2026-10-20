@@ -184,19 +184,30 @@ def validate_suite(suite: Suite, tasks=None, quiet: bool = False) -> list[dict]:
                 if not quiet:
                     print(f"BAD {task.id:<26s} {exc}")
                 continue
-            ok = graded.solved and graded.total > 0
+            # The reference must reach every declared check, otherwise the
+            # denominator is a guess and scores across models stop being
+            # comparable.
+            denominator_ok = graded.total == task.checks
+            ok = graded.solved and graded.total > 0 and denominator_ok
             results.append(
                 {
                     "task": task.id,
                     "ok": ok,
                     "passed": graded.passed,
                     "total": graded.total,
+                    "checks": task.checks,
+                    "denominator_ok": denominator_ok,
                     "seconds": round(graded.seconds, 2),
                 }
             )
             if not quiet:
                 status = "OK " if ok else "BAD"
                 print(f"{status} {task.id:<26s} {graded.passed:>3}/{graded.total:<3} {graded.seconds:5.1f}s")
+                if not denominator_ok:
+                    print(
+                        f"    meta.checks={task.checks} but the grader reached {graded.total}; "
+                        "declared and reached must agree on the reference"
+                    )
                 if not ok:
                     for failure in graded.failures[:6]:
                         print(f"    {failure}")
@@ -207,12 +218,19 @@ def cmd_validate(args: argparse.Namespace) -> int:
     config = _config(args)
     suite = _suite(args, config)
     tasks = suite.select(args.only_list, args.exclude_list) if (args.only_list or args.exclude_list) else suite.tasks
+    if getattr(args, "tier_list", None):
+        wanted = set(args.tier_list)
+        tasks = [t for t in tasks if t.tier in wanted]
     print(f"validating {len(tasks)} task(s) in {suite.id} against their reference solutions\n")
     results = validate_suite(suite, tasks)
     bad = [r for r in results if not r["ok"]]
     total = sum(r["total"] for r in results)
     passed = sum(r["passed"] for r in results)
-    print(f"\n{len(results) - len(bad)}/{len(results)} tasks perfect, {passed}/{total} assertions")
+    declared = sum(r.get("checks", 0) for r in results)
+    print(
+        f"\n{len(results) - len(bad)}/{len(results)} tasks perfect, {passed}/{total} assertions "
+        f"({declared} declared)"
+    )
     if bad:
         print("FAILED: " + ", ".join(r["task"] for r in bad))
         return 1
@@ -269,6 +287,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         repair=not args.no_repair and (config.repair if config else True),
         only=args.only_list,
         exclude=args.exclude_list,
+        tiers=args.tier_list,
         max_tokens=args.max_tokens,
         retry_cap=args.retry_cap,
         resume=args.resume,
@@ -770,7 +789,7 @@ EXAMPLE_META = """{{
   "lang": "py",
   "max_tokens": 1024,
   "timeout": 60,
-  "checks": 7
+  "checks": 6
 }}
 """
 
@@ -844,6 +863,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(p)
     p.add_argument("--only", default=None, help="comma separated task ids")
     p.add_argument("--exclude", default=None, help="comma separated task ids")
+    p.add_argument("--tier", dest="tier", default=None, help="comma separated tiers (core, stretch)")
     p.set_defaults(func=cmd_validate)
 
     p = sub.add_parser("run", help="benchmark a target")
@@ -857,6 +877,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--samples", type=int, help="independent samples per task")
     p.add_argument("--only", dest="only", default=None, help="comma separated task ids")
     p.add_argument("--exclude", dest="exclude", default=None, help="comma separated task ids")
+    p.add_argument(
+        "--tier",
+        dest="tier",
+        default=None,
+        help="comma separated tiers to run (core, stretch); default: all",
+    )
     p.add_argument("--max-tokens", type=int, default=None, help="override every task's token cap")
     p.add_argument("--retry-cap", type=int, default=None, help="token cap for the retry after a length finish")
     p.add_argument("--temperature", type=float, default=None)
@@ -1010,7 +1036,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     # Normalise comma-separated task lists.
-    for attr in ("only", "exclude"):
+    for attr in ("only", "exclude", "tier"):
         value = getattr(args, attr, None)
         if isinstance(value, str):
             setattr(args, f"{attr}_list", [p.strip() for p in value.split(",") if p.strip()])

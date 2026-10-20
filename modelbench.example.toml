@@ -45,6 +45,8 @@ model = "local"                 # any id; llama-server ignores it
 top_k = 20                      # llama.cpp-only sampling knobs
 min_p = 0.0
 timeout_s = 1800
+# context = 32768               # optional; default is to ask /props or /v1/models
+#                               # and clamp every answer to what is left
 
 # Optional: let modelbench start and stop the server itself (shell commands,
 # run through /bin/sh with {port} substituted).  The log goes to server.log

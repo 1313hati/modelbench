@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.2.0
+
+The release where a score means the same thing on an 8k laptop model and a 128k
+server model, and where "failed" stops hiding "never answered".
+
+- **The denominator is the task's declared `checks`.** A grader that stops
+  after 6 of 47 checks now scores 6/47, not 6/6. Previously the reached count
+  became the denominator, so a crash that skipped most of a suite could read as
+  near-perfect; totals also differed between models on the same suite (187 vs
+  264 assertions on core-v2), which made `assertion_rate` incomparable. Both
+  numbers are recorded: `total` and `reported_total`.
+- **`modelbench validate` now fails when declared and reached checks disagree.**
+  The reference solution must hit every declared check, or the suite is
+  rejected with `meta.checks=N but the grader reached M`. Found and fixed one
+  such drift in the `init-suite` scaffold (declared 7, real 6).
+- **Context discovery and budget clamping.** `context` in a target config, or
+  `/props` and `/v1/models` on the server, tells the runner the window; answer
+  caps are lowered to fit it and `run.json` records what was found. Tasks can
+  declare `min_ctx`; those that cannot fit are skipped with a warning instead
+  of failing as if the model were wrong.
+- **Tiers.** `meta.json` gains `tier = core|stretch`; `--tier core` runs the
+  subset a small model can finish, and reports show a score per tier when a run
+  mixes them.
+- **A protocol verdict per attempt.** `ok`, `empty_answer`, `unparseable`,
+  `grader_crash`, `truncated`, stored on every attempt and counted in the
+  report. A thinking model that spends its whole budget in the reasoning
+  channel is now visible as an empty answer, not as bad code.
+- **Repair turns echo reasoning when content is empty.** Previously the
+  assistant turn read `(empty)`, throwing away the only draft a thinking model
+  produced.
+- core-v2 tasks carry `tier` and `min_ctx`. Their `meta.json` changed, so the
+  suite digest changed too: comparing a 2.2 run with a 2.1 run needs
+  `--allow-mixed`, and the scores themselves are unaffected.
+- 105 -> 122 tests.
+
 ## 2.1.0
 
 The release where the benchmark stops asking the reader to hold a p-value in

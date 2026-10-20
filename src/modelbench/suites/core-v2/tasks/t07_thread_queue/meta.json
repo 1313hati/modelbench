@@ -3,6 +3,8 @@
   "lang": "py",
   "kind": "file",
   "category": "concurrency",
+  "tier": "core",
+  "min_ctx": 1536,
   "timeout": 180,
   "max_tokens": 8192,
   "checks": 23,

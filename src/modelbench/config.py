@@ -204,6 +204,10 @@ class Target:
     # fully-solved task cost, which is half of "should I use this model".
     price_input: float | None = None
     price_output: float | None = None
+    # Context window in tokens. Left unset, the runner asks the server (/props
+    # on llama.cpp, model metadata on vLLM and friends) so one suite can run on
+    # an 8k model and a 128k model without hand-tuning limits.
+    context: int | None = None
 
     def __post_init__(self) -> None:
         self.base_url = self.base_url.rstrip("/")
@@ -222,11 +226,17 @@ class Target:
         return f"{self.base_url}/models"
 
     @property
+    def root_url(self) -> str:
+        return self.base_url[: -len("/v1")] if self.base_url.endswith("/v1") else self.base_url
+
+    @property
     def health_url(self) -> str:
-        root = self.base_url
-        if root.endswith("/v1"):
-            root = root[: -len("/v1")]
-        return f"{root}{self.health_path}"
+        return f"{self.root_url}{self.health_path}"
+
+    @property
+    def props_url(self) -> str:
+        """llama.cpp reports the loaded context window here."""
+        return f"{self.root_url}/props"
 
     @property
     def port(self) -> int | None:
@@ -342,6 +352,7 @@ def _target_from_table(name: str, table: dict, defaults: Generation, base: Path)
         health_path=_str(table, "health_path", where, "/health") or "/health",
         price_input=_float(table, "price_input", where),
         price_output=_float(table, "price_output", where),
+        context=_int(table, "context", where),
     )
 
 

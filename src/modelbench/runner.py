@@ -66,6 +66,7 @@ class RunPlan:
     repair: bool = True
     only: list[str] = field(default_factory=list)
     exclude: list[str] = field(default_factory=list)
+    tiers: list[str] = field(default_factory=list)
     max_tokens: int | None = None
     retry_cap: int | None = None
     resume: bool = False
@@ -103,6 +104,8 @@ class Runner:
         self.errors = 0
         self._lock = threading.Lock()
         self.skipped: list[str] = []
+        self.skipped_context: list[str] = []
+        self.context: int | None = None
         self._server_log = None
         self._server_stopped = False
 
@@ -198,6 +201,42 @@ class Runner:
     # ------------------------------------------------------------------ #
     # one task × one sample
     # ------------------------------------------------------------------ #
+    def _cap_for(self, prompt: str, cap: int) -> int:
+        """Clamp an answer budget to what the model can actually hold.
+
+        ``prompt_chars / 3`` is a deliberately pessimistic token estimate
+        (code runs near 3.3 chars/token); overestimating costs a little
+        headroom, underestimating returns an HTTP 400 or a silent truncation.
+        """
+        if not self.context:
+            return cap
+        estimate = max(1, len(prompt) // 3)
+        room = self.context - estimate - 256
+        if room <= 128:
+            raise ModelBenchError(
+                f"context window {self.context:,} tokens cannot hold this prompt "
+                f"(~{estimate:,} tokens) plus an answer"
+            )
+        return max(128, min(cap, room))
+
+    @staticmethod
+    def _protocol(result: ChatResult, source: str, graded, retried: bool) -> str:
+        """Why a graded attempt looks the way it does, in one word.
+
+        Scores alone hide the difference between "wrote the wrong code" and
+        "never produced an answer the harness could grade"; a benchmark that
+        conflates them reports formatting as capability.
+        """
+        if not (result.content or "").strip():
+            return "empty_answer"
+        if source == "none":
+            return "unparseable"
+        if graded.no_result_line:
+            return "grader_crash"
+        if result.finish_reason == "length" and not retried:
+            return "truncated"
+        return "ok"
+
     def _extra_call(self, result: ChatResult, max_tokens: int) -> dict:
         return {
             "max_tokens": max_tokens,
@@ -212,12 +251,14 @@ class Runner:
         sample_dir = plan.out_dir / f"s{sample}"
         raw_path = sample_dir / "raw" / f"{task.id}.txt"
         sol_dir = sample_dir / "sol"
-        cap = plan.max_tokens or task.max_tokens
+        cap = self._cap_for(prompt, plan.max_tokens or task.max_tokens)
         retry_cap = (
             plan.retry_cap
             if plan.retry_cap is not None
             else (task.retry_cap or plan.target.generation.retry_cap)
         )
+        if retry_cap:
+            retry_cap = self._cap_for(prompt, retry_cap) if retry_cap > cap else None
 
         wall_start = time.time()
         extra: list[dict] = []
@@ -246,23 +287,37 @@ class Runner:
             "files_written": written,
             "retried_after_length": retried,
             "discarded_calls": extra,
+            "protocol": self._protocol(result, source, graded, retried),
             **graded.to_record(),
         }
 
         repair_record = None
         if plan.repair and not graded.solved:
+            # A thinking model can put everything in the reasoning channel and
+            # leave content empty; sending "(empty)" back throws away the only
+            # draft it produced. Echo the reasoning instead, capped so the
+            # repair call still fits the window.
+            draft = (result.content or "").strip() or (result.reasoning or "").strip()
+            feedback = build_repair_prompt("\n".join(graded.failures))
             messages = [
                 {"role": "user", "content": prompt},
-                {"role": "assistant", "content": result.content or "(empty)"},
-                {"role": "user", "content": build_repair_prompt("\n".join(graded.failures))},
+                {"role": "assistant", "content": draft[-12000:] or "(empty)"},
+                {"role": "user", "content": feedback},
             ]
+            # The repair prompt is longer than the first one (it carries the
+            # failing assertions and the draft), so its answer budget must be
+            # recomputed rather than inherited.
+            repair_cap = self._cap_for(prompt + draft[-12000:] + feedback, cap)
+            repair_retry = None
+            if retry_cap and retry_cap > repair_cap:
+                repair_retry = self._cap_for(prompt + draft[-12000:] + feedback, retry_cap)
             repair_raw = sample_dir / "raw" / f"{task.id}.repair.txt"
-            repair_result = self.client.chat(messages, max_tokens=cap, raw_path=repair_raw, seed=seed)
+            repair_result = self.client.chat(messages, max_tokens=repair_cap, raw_path=repair_raw, seed=seed)
             repair_extra: list[dict] = []
-            if repair_result.truncated and retry_cap and retry_cap > cap:
-                repair_extra.append(self._extra_call(repair_result, cap))
+            if repair_result.truncated and repair_retry and repair_retry > repair_cap:
+                repair_extra.append(self._extra_call(repair_result, repair_cap))
                 repair_result = self.client.chat(
-                    messages, max_tokens=retry_cap, raw_path=repair_raw, seed=seed
+                    messages, max_tokens=repair_retry, raw_path=repair_raw, seed=seed
                 )
             repair_solution, repair_source, repair_written = task.write_solution(
                 repair_result.content, sol_dir / "repair"
@@ -270,10 +325,11 @@ class Runner:
             repair_graded = grade(task, repair_solution)
             repair_record = {
                 **repair_result.metrics(),
-                "max_tokens": retry_cap if repair_extra else cap,
+                "max_tokens": repair_retry if repair_extra else repair_cap,
                 "source": repair_source,
                 "files_written": repair_written,
                 "discarded_calls": repair_extra,
+                "protocol": self._protocol(repair_result, repair_source, repair_graded, bool(repair_extra)),
                 **repair_graded.to_record(),
             }
 
@@ -288,12 +344,14 @@ class Runner:
             "task": task.id,
             "title": task.title,
             "category": task.category,
+            "tier": task.tier,
             "kind": task.kind,
             "lang": task.lang,
             "sample": sample,
             "seed": seed,
             "when": now_iso(),
             "prompt_chars": len(prompt),
+            "context": self.context,
             "first": first,
             "repair": repair_record,
             "final_score": final["score"],
@@ -308,6 +366,11 @@ class Runner:
         plan = self.plan
         plan.out_dir.mkdir(parents=True, exist_ok=True)
         tasks = plan.suite.select(plan.only, plan.exclude)
+        if plan.tiers:
+            wanted = {t.lower() for t in plan.tiers}
+            tasks = [t for t in tasks if t.tier in wanted]
+            if not tasks:
+                raise ModelBenchError(f"no tasks in tier(s) {', '.join(sorted(wanted))}")
         self._preflight(tasks)
         meta = self._meta(tasks)
         write_json(plan.out_dir / "run.json", meta)
@@ -324,6 +387,18 @@ class Runner:
             self._start_server()
             self.served_id = self.client.wait_ready()
             self.print(f"target {plan.target.name} @ {plan.target.base_url} → served as {self.served_id!r}")
+            self.context = self.client.detect_context()
+            if self.context:
+                self.print(f"context window: {self.context:,} tokens (answers clamped to fit)")
+                too_small = [t for t in tasks if t.min_ctx and t.min_ctx > self.context]
+                if too_small:
+                    self.skipped_context = [t.id for t in too_small]
+                    drop = set(self.skipped_context)
+                    tasks[:] = [t for t in tasks if t.id not in drop]
+                    self.print(
+                        f"warning: skipping {len(too_small)} task(s) that need more than "
+                        f"{self.context:,} tokens: " + ", ".join(self.skipped_context)
+                    )
             if plan.warmup:
                 self.client.chat([{"role": "user", "content": "Reply with the single word: ready"}], max_tokens=16)
 
@@ -424,6 +499,8 @@ class Runner:
                 "records": len(read_jsonl(self.results_path)),
                 "errors": self.errors,
                 "skipped_tasks": self.skipped,
+                "skipped_context": self.skipped_context,
+                "context": self.context,
             }
         )
         write_json(self.plan.out_dir / "run.json", meta)
@@ -442,8 +519,9 @@ class Runner:
         flags = ""
         if first.get("retried_after_length"):
             flags += " [cap-retry]"
-        if first.get("no_result_line"):
-            flags += " [no-result]"
+        protocol = first.get("protocol") or "ok"
+        if protocol != "ok":
+            flags += f" [{protocol.replace('_', '-')}]"
         if first.get("source") in {"raw", "fence-unclosed"}:
             flags += f" [{first['source']}]"
         tps = f"{first['tok_per_s']:.0f} t/s" if first.get("tok_per_s") else "— t/s"

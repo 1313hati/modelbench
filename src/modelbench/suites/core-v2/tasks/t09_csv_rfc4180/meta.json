@@ -3,6 +3,8 @@
   "lang": "py",
   "kind": "file",
   "category": "parsing",
+  "tier": "stretch",
+  "min_ctx": 1536,
   "timeout": 120,
   "max_tokens": 8192,
   "checks": 33,

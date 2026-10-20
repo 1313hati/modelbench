@@ -241,6 +241,16 @@ def run_metrics(run: Run) -> dict:
     for record in records:
         source = str(record["first"].get("source") or "?")
         sources[source] = sources.get(source, 0) + 1
+    protocols: dict[str, int] = {}
+    for record in records:
+        kind = str(record["first"].get("protocol") or "ok")
+        protocols[kind] = protocols.get(kind, 0) + 1
+    tiers: dict[str, dict[str, list[float]]] = {}
+    for record in records:
+        tier = str(record.get("tier") or "core")
+        bucket = tiers.setdefault(tier, {"score": [], "solved": []})
+        bucket["score"].append(record["final_score"])
+        bucket["solved"].append(1.0 if record.get("final_solved") else 0.0)
     errors = sum(1 for r in records if r.get("error"))
     per_task_scores = {task: [r["first"]["score"] for r in recs] for task, recs in per_task.items()}
     spreads = [max(v) - min(v) for v in per_task_scores.values() if len(v) > 1]
@@ -276,6 +286,12 @@ def run_metrics(run: Run) -> dict:
         "assertions_passed": passed,
         "assertions_total": assertions,
         "assertion_rate": (passed / assertions) if assertions else 0.0,
+        "protocols": protocols,
+        "protocol_failures": sum(n for k, n in protocols.items() if k != "ok"),
+        "by_tier": {
+            tier: {"tasks": len(v["score"]), "score": mean(v["score"]), "solved": mean(v["solved"])}
+            for tier, v in tiers.items()
+        },
         "solved_first": mean(solved_first),
         "solved_final": mean(solved_final),
         "repairs": len(repairs),
@@ -571,8 +587,30 @@ def headline_rows(runs: Sequence[Run], metrics: Sequence[dict]) -> list[tuple[st
             "first-attempt assertions",
             [f"{m['assertions_passed']}/{m['assertions_total']} ({pct(m['assertion_rate'])})" for m in metrics],
         ),
+        (
+            "protocol failures",
+            [
+                ", ".join(f"{kind} {n}" for kind, n in sorted(m["protocols"].items()) if kind != "ok") or "none"
+                for m in metrics
+            ],
+        ),
         ("fully solved, first", [pct(m["solved_first"]) for m in metrics]),
         ("fully solved, final", [pct(m["solved_final"]) for m in metrics]),
+        *(
+            [
+                (
+                    "score by tier",
+                    [
+                        ", ".join(
+                            f"{tier} {pct(v['score'])} (n={v['tasks']})" for tier, v in sorted(m["by_tier"].items())
+                        )
+                        for m in metrics
+                    ],
+                )
+            ]
+            if any(len(m["by_tier"]) > 1 for m in metrics)
+            else []
+        ),
         (
             "repair turns / improved / solved",
             [f"{m['repairs']} / {m['improved']} / {m['repaired_solved']}" for m in metrics],

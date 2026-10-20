@@ -3,6 +3,8 @@
   "lang": "py",
   "kind": "file",
   "category": "spec",
+  "tier": "core",
+  "min_ctx": 1536,
   "timeout": 120,
   "max_tokens": 6144,
   "checks": 18,

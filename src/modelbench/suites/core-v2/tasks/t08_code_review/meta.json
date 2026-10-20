@@ -3,6 +3,8 @@
   "lang": "json",
   "kind": "review",
   "category": "review",
+  "tier": "core",
+  "min_ctx": 3072,
   "timeout": 120,
   "max_tokens": 8192,
   "checks": 14,

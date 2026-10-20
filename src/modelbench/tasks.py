@@ -151,6 +151,16 @@ class Task:
         return int(value) if value else None
 
     @property
+    def min_ctx(self) -> int:
+        """Prompt + answer tokens a model needs before this task is attempted."""
+        return int(self.meta.get("min_ctx") or 0)
+
+    @property
+    def tier(self) -> str:
+        """``core`` tasks every model should try; ``stretch`` ones need scale."""
+        return str(self.meta.get("tier") or "core").lower()
+
+    @property
     def extension(self) -> str:
         return extraction.extension_for(self.lang)
 
@@ -376,6 +386,7 @@ class Suite:
             "root": str(self.root),
             "tasks": len(self.tasks),
             "categories": self.categories,
+            "tiers": sorted({t.tier for t in self.tasks}),
             "checks": self.total_checks,
             "digest": self.digest(),
         }

@@ -158,6 +158,47 @@ class ChatClient:
             return None
         return payload if isinstance(payload, dict) else {"status": "ok"}
 
+    def detect_context(self) -> int | None:
+        """The context window the server actually loaded, if it will say.
+
+        Three sources, tried in order: an explicit ``context`` in the config, a
+        llama.cpp ``/props`` payload, and the model card from ``/v1/models``
+        (vLLM, TGI and OpenRouter put ``context_length``/``max_model_len``
+        there).  Unknown is ``None``: a guess would silently truncate prompts.
+        """
+        if self.target.context:
+            return int(self.target.context)
+        try:
+            props = self._get_json(self.target.props_url, timeout=3)
+        except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError, http.client.HTTPException):
+            props = {}
+        if isinstance(props, dict):
+            for key in ("n_ctx", "context_length", "n_ctx_train"):
+                value = props.get(key)
+                if isinstance(value, (int, float)) and value > 0:
+                    return int(value)
+            settings = props.get("default_generation_settings")
+            if isinstance(settings, dict) and isinstance(settings.get("n_ctx"), (int, float)):
+                return int(settings["n_ctx"])
+            info = props.get("model_info")
+            if isinstance(info, dict):
+                for key, value in info.items():
+                    if key.endswith("context_length") and isinstance(value, (int, float)):
+                        return int(value)
+        try:
+            payload = self._get_json(self.target.models_url, timeout=3)
+        except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError, http.client.HTTPException):
+            return None
+        data = payload.get("data") if isinstance(payload, dict) else None
+        for item in data or []:
+            if not isinstance(item, dict):
+                continue
+            for key in ("context_length", "max_model_len", "context_window"):
+                value = item.get(key)
+                if isinstance(value, (int, float)) and value > 0:
+                    return int(value)
+        return None
+
     def wait_ready(self, timeout: float | None = None, poll: float = 1.0) -> str:
         """Block until the endpoint answers, return the served model id."""
         limit = timeout if timeout is not None else self.target.ready_timeout_s
