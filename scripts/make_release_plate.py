@@ -15,6 +15,7 @@ import argparse
 import json
 import sys
 import textwrap
+from datetime import datetime
 from pathlib import Path
 
 from PIL import ImageDraw, ImageFont
@@ -106,7 +107,10 @@ def main() -> int:
     tracked(d, (80, 728), "MEASURED, NOT QUOTED  ·  EVERY DIVISOR DECLARED", fonts["readout"], CYAN, 1.8)
     tracked(d, (80, 760), "github.com/1313hati/modelbench", fonts["note"], AMBER, 1.2)
 
-    title_block(d, W, H, f"MB-{args.version}", date="20 OCT 2026", handle="@1101hati")
+    # The plate is dated the day it is drawn, not the day the previous release
+    # was: a hardcoded date silently misdates every sheet after the first.
+    stamp = datetime.now().strftime("%d %b %Y").upper()
+    title_block(d, W, H, f"MB-{args.version}", date=stamp, handle="@1101hati")
 
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out)

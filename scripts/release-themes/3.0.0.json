@@ -1,0 +1,13 @@
+{
+  "eyebrow": "MODELBENCH 3.0.0  ·  RELEASE PLATE",
+  "headline": "Watch it run, and measure the wait",
+  "subhead": "A live dashboard, an event log per attempt, and three speeds where there used to be one.",
+  "tiles": [
+    ["0.25s", "The dashboard refreshes", "progress, the attempt in flight, tok/s, an ETA from recorded pairs"],
+    ["1 LINE", "Every attempt, on disk", "events.jsonl: append-only, flushed, deletable without losing a score"],
+    ["3 SPEEDS", "Fast is three claims", "time to first token, inter-token pacing, end-to-end rate"],
+    ["NONE ≠ 0", "Unmeasured stays unmeasured", "no clock means no rate; no cache detail means unknown"],
+    ["253", "Tests green", "122 before this release, 131 of them new"],
+    ["3.0.0", "Published scores unchanged", "scoring, repair and extraction are untouched"]
+  ]
+}
