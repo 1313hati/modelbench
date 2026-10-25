@@ -9,6 +9,8 @@
     modelbench card RUN             # a shareable SVG scorecard
     modelbench compare BASE RUN...  # is a run actually different from the baseline
     modelbench leaderboard runs/*   # rank runs, with ties and a frontier
+    modelbench tui [RUN]            # watch a run live: progress, tok/s, in-flight
+    modelbench history runs/*       # every run of a target, oldest first
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -36,6 +39,13 @@ from .config import Config, Generation, Target, find_config, target_from_cli
 from .explain import failing_records, load as load_explain, render_index, render_record
 from .errors import ModelBenchError, SuiteError, TaskError
 from .grader import grade, runner_available
+from .history import (
+    build as build_history,
+    render_console as render_history,
+    render_json as history_json,
+    render_markdown as history_markdown,
+    summary_line as history_summary,
+)
 from .leaderboard import (
     load_and_build,
     render_console as render_leaderboard,
@@ -55,7 +65,7 @@ from .report import (
     run_metrics,
     write_reports,
 )
-from .runner import RunPlan, Runner
+from .runner import RunOutcome, RunPlan, Runner
 from .tasks import PACKAGED_SUITES, Suite, available_suites, resolve_suite
 from .util import column_table, human_duration, now_iso, pct
 
@@ -261,6 +271,46 @@ def _print_plan(suite: Suite, plan: RunPlan, out: Path) -> None:
     print(f"would write   {out}")
 
 
+def _run_with_dashboard(plan: RunPlan, out: Path) -> RunOutcome:
+    """Run in a worker thread; draw the dashboard in the main thread.
+
+    curses owns the main thread, so the runner moves to a worker. ``q`` is
+    locked while the run is live — quitting would end the process and take the
+    run with it — while Ctrl-C still stops everything, leaving the partial
+    results on disk exactly as the serial path does.
+    """
+    from .tui import watch
+
+    plan.quiet = True
+    holder: dict[str, RunOutcome] = {}
+    errors: list[BaseException] = []
+
+    def work() -> None:
+        try:
+            holder["outcome"] = Runner(plan).execute()
+        except BaseException as exc:  # noqa: BLE001 - re-raised below
+            errors.append(exc)
+
+    worker = threading.Thread(target=work, name="modelbench-run", daemon=True)
+    worker.start()
+    interrupted = False
+    try:
+        watch(out, follow=False, lock_quit=True, stop_when=lambda: not worker.is_alive())
+    except KeyboardInterrupt:
+        # Ctrl-C means "stop", so do not wait for a twenty-minute suite to
+        # finish: the process exits, the daemon thread dies with it, and the
+        # records already on disk stay there.
+        interrupted = True
+    finally:
+        if not interrupted:
+            worker.join()
+    if interrupted:
+        raise KeyboardInterrupt
+    if errors:
+        raise errors[0]
+    return holder["outcome"]
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     config = _config(args, required=True)
     suite = _suite(args, config)
@@ -323,7 +373,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 0
 
     try:
-        outcome = Runner(plan).execute()
+        if getattr(args, "tui", False) and sys.stdout.isatty():
+            outcome = _run_with_dashboard(plan, out)
+        else:
+            outcome = Runner(plan).execute()
     except KeyboardInterrupt:
         return 130
 
@@ -569,6 +622,80 @@ def cmd_leaderboard(args: argparse.Namespace) -> int:
     path = out / "LEADERBOARD.md"
     path.write_text(render_leaderboard_markdown(payload), encoding="utf-8")
     print(f"\nleaderboard {path}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# tui
+# --------------------------------------------------------------------------- #
+def _latest_run(root: Path | None = None) -> Path | None:
+    root = root or Path("runs")
+    if not root.is_dir():
+        return None
+    candidates = discover_runs(root)
+    if not candidates:
+        return None
+
+    def newest(path: Path) -> float:
+        stamp = path / "results.jsonl"
+        try:
+            return stamp.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    return max(candidates, key=newest)
+
+
+def cmd_tui(args: argparse.Namespace) -> int:
+    from .tui import TuiState, watch
+
+    path = Path(args.run).expanduser() if args.run else _latest_run()
+    if path is None:
+        print("error: no run directories found; pass one, e.g. modelbench tui runs/<name>", file=sys.stderr)
+        return 2
+    if not path.exists() and not args.wait:
+        print(f"error: {path} does not exist (add --wait to watch for it)", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(TuiState(path).refresh().snapshot(), indent=2))
+        return 0
+    return watch(
+        path,
+        once=args.once,
+        follow=args.follow,
+        interval=args.interval,
+        unicode=not args.ascii,
+        max_frames=args.frames,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# history
+# --------------------------------------------------------------------------- #
+def cmd_history(args: argparse.Namespace) -> int:
+    entries = list(args.paths or ["runs"])
+    paths: list[Path] = []
+    for entry in entries:
+        candidate = Path(entry).expanduser()
+        if candidate.is_dir() and not (candidate / "results.jsonl").is_file():
+            found = discover_runs(candidate)
+            if found:
+                paths.extend(found)
+                continue
+        paths.append(candidate)
+    if not paths:
+        print("error: no run directories found", file=sys.stderr)
+        return 2
+    payload = build_history(paths, by=args.by)
+    if args.json:
+        print(json.dumps(history_json(payload), indent=2))
+        return 0
+    if args.md:
+        print(history_markdown(payload))
+        return 0
+    print(render_history(payload))
+    print()
+    print(history_summary(payload))
     return 0
 
 
@@ -913,6 +1040,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--html", default=None, help="also write the HTML report to this path")
     p.add_argument("--dry-run", action="store_true", help="print the plan and exit without calling the endpoint")
     p.add_argument(
+        "--tui",
+        action="store_true",
+        help="draw the live dashboard instead of scrolling progress lines (needs a terminal)",
+    )
+    p.add_argument(
         "--fail-under",
         type=float,
         default=None,
@@ -1028,6 +1160,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("name")
     p.add_argument("--dir", default=None)
     p.set_defaults(func=cmd_init_suite)
+
+    p = sub.add_parser("tui", help="watch a run live: progress, in-flight task, tok/s")
+    p.add_argument("run", nargs="?", default=None, help="run directory (default: the newest under runs/)")
+    p.add_argument("--once", action="store_true", help="draw one frame and exit")
+    p.add_argument("--follow", action="store_true", help="keep watching after the run finishes")
+    p.add_argument("--frames", type=int, default=None, metavar="N", help="stop after N frames")
+    p.add_argument("--interval", type=float, default=0.25, help="seconds between refreshes (default 0.25)")
+    p.add_argument("--ascii", action="store_true", help="plain glyphs, for terminals without block drawing")
+    p.add_argument("--json", action="store_true", help="print the dashboard's numbers as JSON")
+    p.add_argument("--wait", action="store_true", help="watch a directory that does not exist yet")
+    p.set_defaults(func=cmd_tui)
+
+    p = sub.add_parser("history", help="each target's runs in order, with deltas and a sparkline")
+    p.add_argument("paths", nargs="*", default=None, help="run directories (default: runs/)")
+    p.add_argument("--by", choices=["first", "final"], default="first", help="which score to trace")
+    p.add_argument("--json", action="store_true", help="print JSON")
+    p.add_argument("--md", action="store_true", help="print a markdown table")
+    p.set_defaults(func=cmd_history)
 
     return parser
 

@@ -25,6 +25,7 @@ from .util import (
     now_iso,
     p90,
     pct,
+    percentile,
     read_json,
     read_jsonl,
     stdev,
@@ -234,6 +235,17 @@ def run_metrics(run: Run) -> dict:
     walls = [r["first"].get("total_s") or 0.0 for r in records]
     tps = [r["first"]["tok_per_s"] for r in records if r["first"].get("tok_per_s")]
     ttfts = [r["first"].get("ttft_s") for r in records if r["first"].get("ttft_s")]
+    # Stream pacing. Absent on non-streaming servers and on records written by
+    # modelbench < 3.0, so every aggregate has to tolerate an empty list rather
+    # than reporting 0.000 s — "no measurement" and "instant" are different.
+    itls = [r["first"].get("itl_p50_s") for r in records if r["first"].get("itl_p50_s") is not None]
+    itls_hi = [r["first"].get("itl_p95_s") for r in records if r["first"].get("itl_p95_s") is not None]
+    wall_tps = [
+        r["first"].get("tok_per_s_wall") for r in records if r["first"].get("tok_per_s_wall") is not None
+    ]
+    caches = [
+        r["first"].get("cache_ratio") for r in records if r["first"].get("cache_ratio") is not None
+    ]
     tokens = [r["first"].get("completion_tokens") for r in records if r["first"].get("completion_tokens")]
     passed = sum(r["first"]["passed"] for r in records)
     assertions = sum(r["first"]["total"] for r in records)
@@ -270,6 +282,10 @@ def run_metrics(run: Run) -> dict:
         )
         solved_count = sum(1 for r in records if r.get("final_solved"))
         cost_per_solved = cost / solved_count if solved_count else None
+    solved_total = sum(1 for r in records if r.get("final_solved"))
+    generation_s = sum(walls)
+    wall_total = sum(r.get("wall_s") or 0.0 for r in records)
+    gen_share = (generation_s / wall_total) if wall_total else None
     return {
         "records": len(records),
         "tasks": len(per_task),
@@ -318,6 +334,23 @@ def run_metrics(run: Run) -> dict:
         "unstable": len(unstable),
         "unstable_ids": unstable,
         "sample_spread": mean(spreads) if spreads else 0.0,
+        # -- 3.0: where the wall clock went, and how smooth the stream was -- #
+        "ttft_p50": percentile(ttfts, 0.50) if ttfts else None,
+        "ttft_p95": percentile(ttfts, 0.95) if ttfts else None,
+        "itl_p50": median(itls) if itls else None,
+        "itl_p95": median(itls_hi) if itls_hi else None,
+        "tps_p50": percentile(tps, 0.50) if tps else None,
+        "tps_p90": percentile(tps, 0.90) if tps else None,
+        "wall_tps_p50": percentile(wall_tps, 0.50) if wall_tps else None,
+        "cache_ratio": mean(caches) if caches else None,
+        "cache_records": len(caches),
+        "generation_s": generation_s,
+        "grading_s": max(0.0, wall_total - generation_s),
+        "gen_share": gen_share,
+        "tokens_per_solved": (output_tokens / solved_total) if solved_total else None,
+        "score_per_ktoken": (
+            mean(final_task_means) / (output_tokens / 1000) if output_tokens else None
+        ),
     }
 
 
@@ -644,6 +677,103 @@ def headline_rows(runs: Sequence[Run], metrics: Sequence[dict]) -> list[tuple[st
     return [row for row in rows if any(cell != MISSING for cell in row[1])]
 
 
+def _ms(value: float | None) -> str:
+    # Sub-millisecond gaps are real (a mock server, a warm local model) but
+    # "0 ms" reads like a missing measurement. Say what it is.
+    if value is None:
+        return MISSING
+    if value < 0.0005:
+        return "<1 ms"
+    return f"{value * 1000:.0f} ms"
+
+
+def _rate(value: float | None, digits: int = 1) -> str:
+    if value is None:
+        return MISSING
+    return f"{value:.0f}" if value >= 1000 else f"{value:.{digits}f}"
+
+
+def timing_rows(runs: Sequence[Run], metrics: Sequence[dict]) -> list[tuple[str, list[str]]]:
+    """Where the time went, and what a point of score cost in tokens.
+
+    The headline table already carries a median decode rate; this one exists
+    because "fast" is three different claims. TTFT is what the operator feels
+    before the first word, inter-token time is the smoothness after it, and the
+    end-to-end rate is the two combined — a server can look fast by one and
+    slow by another. Rows that no run can fill are dropped, the same rule the
+    headline uses.
+    """
+    rows: list[tuple[str, list[str]]] = [
+        (
+            "TTFT p50 / p95",
+            [
+                f"{m['ttft_p50']:.2f}s / {m['ttft_p95']:.2f}s"
+                if m["ttft_p50"] is not None and m["ttft_p95"] is not None
+                else MISSING
+                for m in metrics
+            ],
+        ),
+        (
+            "inter-token p50 / p95",
+            [
+                f"{_ms(m['itl_p50'])} / {_ms(m['itl_p95'])}" if m["itl_p50"] is not None else MISSING
+                for m in metrics
+            ],
+        ),
+        (
+            "decode tok/s p50 / p90",
+            [
+                f"{_rate(m['tps_p50'])} / {_rate(m['tps_p90'])}"
+                if m["tps_p50"] is not None and m["tps_p90"] is not None
+                else MISSING
+                for m in metrics
+            ],
+        ),
+        (
+            "end-to-end tok/s p50",
+            [_rate(m["wall_tps_p50"]) for m in metrics],
+        ),
+        (
+            "prompt cache hit",
+            [
+                f"{m['cache_ratio'] * 100:.0f}% of {m['cache_records']} calls"
+                if m["cache_ratio"] is not None
+                else MISSING
+                for m in metrics
+            ],
+        ),
+        (
+            "generation share of wall",
+            [f"{m['gen_share'] * 100:.0f}%" if m["gen_share"] is not None else MISSING for m in metrics],
+        ),
+        (
+            "grading / extraction overhead",
+            [
+                (
+                    f"{m['grading_s'] / 60:.1f} min"
+                    if m["grading_s"] >= 60
+                    else f"{m['grading_s']:.1f}s"
+                )
+                if m["grading_s"]
+                else MISSING
+                for m in metrics
+            ],
+        ),
+        (
+            "tokens per solved task",
+            [int_fmt(m["tokens_per_solved"]) for m in metrics],
+        ),
+        (
+            "score per 1k output tokens",
+            [
+                f"{m['score_per_ktoken']:.2f} pp" if m["score_per_ktoken"] is not None else MISSING
+                for m in metrics
+            ],
+        ),
+    ]
+    return [row for row in rows if any(cell != MISSING for cell in row[1])]
+
+
 def render_markdown(
     runs: Sequence[Run],
     title: str | None = None,
@@ -891,6 +1021,25 @@ def render_markdown(
     for category in categories:
         cells = [pct(m[category]["first"]) if category in m else MISSING for m in cat_metrics]
         lines.append(f"| {category} | " + " | ".join(cells) + " |")
+
+    # -- timing and budget ----------------------------------------------- #
+    timing = timing_rows(runs, metrics)
+    if timing:
+        lines += [
+            "",
+            "## Timing and budget",
+            "",
+            "Three speeds, because they answer different questions: time to first token is the "
+            "pause before anything appears, inter-token time is the rhythm after it, and "
+            "end-to-end divides completion tokens by the whole request. Token figures cover the "
+            "first attempt and the repair turn together; grading overhead is wall clock the model "
+            "did not spend.",
+            "",
+            "| metric | " + " | ".join(labels) + " |",
+            "|---|" + "---|" * len(labels),
+        ]
+        for label, cells in timing:
+            lines.append(f"| {label} | " + " | ".join(cells) + " |")
 
     # -- failure signatures ---------------------------------------------- #
     signatures = {run.label: failure_signatures(run) for run in runs}
@@ -1299,6 +1448,24 @@ def render_html(
         f'<table class="sortable"><thead><tr><th>metric</th>{head}</tr></thead>'
         f"<tbody>{''.join(body)}</tbody></table></section>"
     )
+
+    # -- timing ----------------------------------------------------------- #
+    timing = timing_rows(runs, metrics)
+    if timing:
+        rows_html = "".join(
+            f"<tr><td>{_esc(label)}</td>"
+            + "".join(f'<td class="num">{_esc(cell)}</td>' for cell in cells)
+            + "</tr>"
+            for label, cells in timing
+        )
+        parts.append(
+            '<section><h2>Timing and budget</h2><p class="sub">Time to first token, stream pacing '
+            "and end-to-end rate are three different measurements: a server can lead on one and "
+            "trail on another. Token figures include the repair turn; grading overhead is wall "
+            "clock the model did not spend.</p>"
+            f'<table class="sortable"><thead><tr><th>metric</th>{head}</tr></thead>'
+            f"<tbody>{rows_html}</tbody></table></section>"
+        )
 
     # -- per task --------------------------------------------------------- #
     all_tasks = sorted({task for metrics_by_task in per_task for task in metrics_by_task})

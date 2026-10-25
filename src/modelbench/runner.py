@@ -14,6 +14,7 @@ from . import RECORD_VERSION, __version__
 from .client import ChatClient, ChatResult
 from .config import Target
 from .errors import GradeError, ModelBenchError, TargetUnavailable
+from .events import EVENT_FILE, EventLog
 from .grader import grade, runner_available
 from .prompts import build_prompt, build_repair_prompt
 from .tasks import Suite, Task
@@ -108,6 +109,25 @@ class Runner:
         self.context: int | None = None
         self._server_log = None
         self._server_stopped = False
+        self.events: EventLog | None = None
+
+    # ------------------------------------------------------------------ #
+    # events
+    # ------------------------------------------------------------------ #
+    def _emit(self, kind: str, **fields) -> None:
+        """Record one line in ``events.jsonl``; a monitor is allowed to be watching."""
+        if self.events is not None:
+            try:
+                self.events.emit(kind, **fields)
+            except OSError:
+                # A full disk must not turn a benchmark into a crash; the
+                # results file is the record that matters.
+                self.events = None
+
+    def _close_events(self) -> None:
+        if self.events is not None:
+            self.events.close()
+            self.events = None
 
     # ------------------------------------------------------------------ #
     # setup
@@ -197,6 +217,7 @@ class Runner:
                 f"warning: skipping {len(dropped)} task(s) without runtime {', '.join(missing)}: "
                 + ", ".join(self.skipped)
             )
+            self._emit("warning", reason="missing_runtime", tasks=self.skipped, runtimes=sorted(missing))
 
     # ------------------------------------------------------------------ #
     # one task × one sample
@@ -264,6 +285,14 @@ class Runner:
         extra: list[dict] = []
         seed = sample_seed(plan.target.generation.seed, sample)
 
+        self._emit(
+            "attempt_started",
+            task=task.id,
+            sample=sample,
+            phase="first",
+            max_tokens=cap,
+            retry_cap=retry_cap,
+        )
         result = self.client.chat(
             [{"role": "user", "content": prompt}], max_tokens=cap, raw_path=raw_path, seed=seed
         )
@@ -290,6 +319,22 @@ class Runner:
             "protocol": self._protocol(result, source, graded, retried),
             **graded.to_record(),
         }
+        self._emit(
+            "attempt_finished",
+            task=task.id,
+            sample=sample,
+            phase="first",
+            score=first["score"],
+            passed=first["passed"],
+            total=first["total"],
+            total_s=first.get("total_s"),
+            ttft_s=first.get("ttft_s"),
+            tok_per_s=first.get("tok_per_s"),
+            completion_tokens=first.get("completion_tokens"),
+            finish_reason=first.get("finish_reason"),
+            protocol=first.get("protocol"),
+            retried=retried,
+        )
 
         repair_record = None
         if plan.repair and not graded.solved:
@@ -312,6 +357,13 @@ class Runner:
             if retry_cap and retry_cap > repair_cap:
                 repair_retry = self._cap_for(prompt + draft[-12000:] + feedback, retry_cap)
             repair_raw = sample_dir / "raw" / f"{task.id}.repair.txt"
+            self._emit(
+                "attempt_started",
+                task=task.id,
+                sample=sample,
+                phase="repair",
+                max_tokens=repair_cap,
+            )
             repair_result = self.client.chat(messages, max_tokens=repair_cap, raw_path=repair_raw, seed=seed)
             repair_extra: list[dict] = []
             if repair_result.truncated and repair_retry and repair_retry > repair_cap:
@@ -332,6 +384,22 @@ class Runner:
                 "protocol": self._protocol(repair_result, repair_source, repair_graded, bool(repair_extra)),
                 **repair_graded.to_record(),
             }
+            self._emit(
+                "attempt_finished",
+                task=task.id,
+                sample=sample,
+                phase="repair",
+                score=repair_record["score"],
+                passed=repair_record["passed"],
+                total=repair_record["total"],
+                total_s=repair_record.get("total_s"),
+                ttft_s=repair_record.get("ttft_s"),
+                tok_per_s=repair_record.get("tok_per_s"),
+                completion_tokens=repair_record.get("completion_tokens"),
+                finish_reason=repair_record.get("finish_reason"),
+                protocol=repair_record.get("protocol"),
+                retried=bool(repair_extra),
+            )
 
         final = repair_record if repair_record and repair_record["score"] > first["score"] else first
         return {
@@ -374,6 +442,21 @@ class Runner:
         self._preflight(tasks)
         meta = self._meta(tasks)
         write_json(plan.out_dir / "run.json", meta)
+        self.events = EventLog(plan.out_dir / EVENT_FILE)
+        self._emit(
+            "run_started",
+            suite=plan.suite.id,
+            suite_version=plan.suite.version,
+            digest=self.suite_digest,
+            target=plan.target.name,
+            base_url=plan.target.base_url,
+            model=plan.target.model,
+            samples=plan.samples,
+            repair=plan.repair,
+            tasks=[t.id for t in tasks],
+            jobs=plan.jobs,
+            modelbench=__version__,
+        )
 
         existing: set[tuple[str, int]] = set()
         if plan.resume:
@@ -399,7 +482,14 @@ class Runner:
                         f"warning: skipping {len(too_small)} task(s) that need more than "
                         f"{self.context:,} tokens: " + ", ".join(self.skipped_context)
                     )
+                    self._emit(
+                        "warning",
+                        reason="context_too_small",
+                        tasks=self.skipped_context,
+                        context=self.context,
+                    )
             if plan.warmup:
+                self._emit("warmup_started")
                 self.client.chat([{"role": "user", "content": "Reply with the single word: ready"}], max_tokens=16)
 
             pairs = self._pairs(tasks)
@@ -410,6 +500,7 @@ class Runner:
                 for index, (task, sample) in enumerate(pairs, start=1):
                     if (task.id, sample) in existing:
                         self.print(f"[{index:>3}/{total}] {task.id:<24s} s{sample}  skipped (recorded)")
+                        self._emit("sample_skipped", task=task.id, sample=sample, reason="recorded")
                         continue
                     prompt = build_prompt(task, plan.suite.prompt_text)
                     try:
@@ -504,6 +595,15 @@ class Runner:
             }
         )
         write_json(self.plan.out_dir / "run.json", meta)
+        self._emit(
+            "run_finished",
+            status=status,
+            records=meta["records"],
+            errors=meta["errors"],
+            elapsed_s=meta["elapsed_s"],
+            skipped=list(self.skipped) + list(self.skipped_context),
+        )
+        self._close_events()
 
     def _pairs(self, tasks: list[Task]) -> list[tuple[Task, int]]:
         if self.plan.order == "task":
@@ -535,6 +635,13 @@ class Runner:
         import traceback
 
         self.print(f"    ! {task.id} s{sample} failed: {type(exc).__name__}: {exc}")
+        self._emit(
+            "attempt_failed",
+            task=task.id,
+            sample=sample,
+            error=type(exc).__name__,
+            message=str(exc)[:400],
+        )
         with open(self.errors_path, "a", encoding="utf-8") as fh:
             fh.write(f"{task.id} s{sample} {type(exc).__name__}: {exc}\n")
             traceback.print_exc(file=fh)

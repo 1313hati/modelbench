@@ -1,5 +1,41 @@
 # Changelog
 
+## 3.0.0
+
+The release where the benchmark can be watched while it runs, and where "fast"
+stops being one number.
+
+- **`modelbench tui` and `run --tui`.** A live dashboard: a progress bar, every
+  task with its per-sample scores, the attempt in flight with its age, a median
+  decode rate over a sparkline of completed calls, error and protocol counts,
+  and an ETA computed from pairs actually recorded. `--json` prints the same
+  numbers for a status bar, `--once` draws one frame for a log, `--ascii` drops
+  the block glyphs. The layout is a pure function of state and size, so it is
+  tested at 30×8 and 200×60 without a terminal.
+- **`events.jsonl`, an append-only log of the live run.** One JSON line per
+  attempt start, attempt finish, failure, skip and warning, flushed per event so
+  `tail -f` is a valid monitor. It is a *view*: `results.jsonl` stays the source
+  of truth and deleting the event log costs no measurement. A full disk
+  disables the log and leaves the run untouched.
+- **Three speeds instead of one.** Every attempt now records `ttft_s`,
+  `itl_p50_s`/`itl_p95_s` (stream pacing), `tok_per_s` (decode only) and
+  `tok_per_s_wall` (end-to-end, TTFT included), plus `cache_ratio` for the
+  prompt tokens the server served from its cache. A server can lead on one and
+  trail on another, which is exactly why one number was never enough.
+- **A Timing and budget section in every report.** TTFT p50/p95, inter-token
+  p50/p95, decode and end-to-end rates, cache hit rate, generation share of
+  wall clock, grading overhead, tokens per solved task and score per 1k output
+  tokens. Rows nothing measured are dropped, never printed as `0.000`.
+- **`modelbench history RUN...`** — each target's runs in order with the delta
+  to the previous run, a 95% interval per row, a sparkline, and a warning when
+  the suite digest moved inside a series (a delta there measures the suite).
+- **Missing measurements stop looking like fast ones.** `tok_per_s` returns
+  `None` instead of a huge number when a response carries no clock, and a
+  server that reports no cache detail is `None`, not `0%`.
+- `record_version` is now 3. Runs from 2.x still report; they simply show fewer
+  timing rows.
+- 122 -> 252 tests.
+
 ## 2.2.0
 
 The release where a score means the same thing on an 8k laptop model and a 128k

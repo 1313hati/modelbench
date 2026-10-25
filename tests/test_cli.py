@@ -23,6 +23,8 @@ def test_parser_exposes_the_documented_commands():
         "mock",
         "self-test",
         "init-suite",
+        "tui",
+        "history",
     } <= commands
 
 
@@ -222,3 +224,160 @@ def test_fail_under_gate_passes_above_the_bar(tmp_path: Path, monkeypatch, capsy
     assert code == 0
     printed = capsys.readouterr().out
     assert "gate" in printed and "pass" in printed
+
+
+# --------------------------------------------------------------------------- #
+# tui / history
+# --------------------------------------------------------------------------- #
+def test_tui_once_prints_a_frame(tmp_path: Path, run_dir, record, capsys):
+    run = run_dir("model-a", [record("a", 1, 1.0)])
+    assert main(["tui", str(run), "--once"]) == 0
+    out = capsys.readouterr().out
+    assert "modelbench" in out
+    assert "model-a" in out
+    assert "100%" in out
+
+
+def test_tui_json_prints_the_snapshot(tmp_path: Path, run_dir, record, capsys):
+    run = run_dir("model-a", [record("a", 1, 1.0)])
+    assert main(["tui", str(run), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["target"] == "model-a"
+    assert payload["records"] == 1
+    assert payload["status"] == "finished"
+
+
+def test_tui_defaults_to_the_newest_run_under_runs(tmp_path: Path, run_dir, record, monkeypatch, capsys):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    older = run_dir("older", [record("a", 1, 1.0)])
+    newer = run_dir("newer", [record("a", 1, 0.5)])
+    older.rename(runs / "older")
+    newer.rename(runs / "newer")
+    import os, time
+    os.utime(runs / "older" / "results.jsonl", (time.time() - 600, time.time() - 600))
+    monkeypatch.chdir(tmp_path)
+    assert main(["tui", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["target"] == "newer"
+
+
+def test_tui_without_a_run_exits_nonzero(tmp_path: Path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert main(["tui", "--json"]) == 2
+    assert "no run directories" in capsys.readouterr().err
+
+
+def test_tui_refuses_a_missing_directory_without_wait(tmp_path: Path, capsys):
+    assert main(["tui", str(tmp_path / "nope"), "--once"]) == 2
+    assert "does not exist" in capsys.readouterr().err
+
+
+def test_history_prints_runs_oldest_first(tmp_path: Path, run_dir, record, capsys):
+    older = run_dir("model-a", [record("a", 1, 0.5)])
+    header = json.loads((older / "run.json").read_text(encoding="utf-8"))
+    header["started_at"] = "2026-01-01T10:00:00+00:00"
+    (older / "run.json").write_text(json.dumps(header), encoding="utf-8")
+
+    newer = run_dir("model-b", [record("a", 1, 1.0)])
+    header = json.loads((newer / "run.json").read_text(encoding="utf-8"))
+    header["started_at"] = "2026-02-01T10:00:00+00:00"
+    header["target"]["name"] = "model-a"
+    (newer / "run.json").write_text(json.dumps(header), encoding="utf-8")
+
+    assert main(["history", str(older), str(newer)]) == 0
+    out = capsys.readouterr().out
+    assert out.index("2026-01-01") < out.index("2026-02-01")
+    assert "2 runs for 1 target(s)" in out
+
+
+def test_history_can_emit_json(tmp_path: Path, run_dir, record, capsys):
+    run = run_dir("model-a", [record("a", 1, 1.0)])
+    assert main(["history", str(run), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["count"] == 1
+    assert payload["runs"][0]["label"] == "model-a"
+
+
+def test_history_expands_a_runs_directory(tmp_path: Path, run_dir, record, monkeypatch, capsys):
+    run_dir("model-a", [record("a", 1, 1.0)])
+    run_dir("model-b", [record("a", 1, 1.0)])
+    assert main(["history", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "model-a" in out and "model-b" in out
+
+
+def test_run_with_dashboard_returns_the_outcome(tmp_path: Path, monkeypatch, record):
+    """The curses loop owns the terminal; the run must still return its result."""
+    seen = {}
+
+    def fake_watch(path, **kwargs):
+        seen["path"] = path
+        seen["kwargs"] = kwargs
+        return 0
+
+    def write(directory: Path, score: float) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        rows = [record("t01_weighted_jobs", 1, score, score >= 1.0)]
+        (directory / "results.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    monkeypatch.setattr("modelbench.tui.watch", fake_watch)
+    monkeypatch.setattr(cli, "Runner", _fake_runner(1.0, write))
+
+    plan = SimpleNamespace(out_dir=tmp_path / "run", quiet=False)
+    outcome = cli._run_with_dashboard(plan, plan.out_dir)
+
+    assert outcome.records
+    assert plan.quiet is True
+    assert seen["path"] == plan.out_dir
+    assert seen["kwargs"]["lock_quit"] is True
+    assert seen["kwargs"]["follow"] is False
+
+
+def test_run_with_dashboard_re_raises_a_failed_run(tmp_path: Path, monkeypatch):
+    class Boom:
+        def __init__(self, plan):
+            pass
+
+        def execute(self):
+            raise RuntimeError("endpoint vanished")
+
+    monkeypatch.setattr("modelbench.tui.watch", lambda path, **kwargs: 0)
+    monkeypatch.setattr(cli, "Runner", Boom)
+
+    plan = SimpleNamespace(out_dir=tmp_path / "run", quiet=False)
+    try:
+        cli._run_with_dashboard(plan, plan.out_dir)
+    except RuntimeError as exc:
+        assert "endpoint vanished" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("the failure was swallowed")
+
+
+def test_ctrl_c_in_the_dashboard_does_not_wait_for_the_run(tmp_path: Path, monkeypatch):
+    import threading
+
+    release = threading.Event()
+
+    class Slow:
+        def __init__(self, plan):
+            pass
+
+        def execute(self):
+            release.wait(timeout=5)
+            return SimpleNamespace(records=[], errors=0)
+
+    def interrupt(path, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("modelbench.tui.watch", interrupt)
+    monkeypatch.setattr(cli, "Runner", Slow)
+
+    plan = SimpleNamespace(out_dir=tmp_path / "run", quiet=False)
+    try:
+        cli._run_with_dashboard(plan, plan.out_dir)
+    except KeyboardInterrupt:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("Ctrl-C was swallowed")
+    finally:
+        release.set()

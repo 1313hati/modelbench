@@ -24,6 +24,7 @@ from typing import Any, Callable
 from . import __version__
 from .config import Target
 from .errors import TargetUnavailable
+from .util import percentile
 
 RETRY_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 529}
 USER_AGENT = f"modelbench/{__version__}"
@@ -43,6 +44,11 @@ class ChatResult:
     chunks: int = 0
     streamed: bool = True
     http_status: int = 200
+    #: Gaps between consecutive content-bearing stream chunks, in seconds.
+    #: A chunk is not a token, so this measures the *pacing* of the stream
+    #: rather than a per-token latency; on a server that flushes per token
+    #: (llama.cpp) the two coincide closely enough to read as smoothness.
+    intervals: list[float] = field(default_factory=list)
 
     # -- derived --------------------------------------------------------- #
     @property
@@ -74,9 +80,44 @@ class ChatResult:
     @property
     def tok_per_s(self) -> float | None:
         tokens = self.completion_tokens
-        if not tokens:
+        # Without a clock there is no rate; returning a huge number from a
+        # 1e-6 guard would poison every average that touched it.
+        if not tokens or self.total_s <= 0:
             return None
         return tokens / self.gen_seconds
+
+    @property
+    def tok_per_s_wall(self) -> float | None:
+        """End-to-end rate: prompt processing and TTFT are inside the clock.
+
+        ``tok_per_s`` deliberately excludes TTFT so it can be compared across
+        prompt lengths; this one refuses to, and is the number a person waiting
+        at the terminal actually experiences.
+        """
+        tokens = self.completion_tokens
+        if not tokens or self.total_s <= 0:
+            return None
+        return tokens / self.total_s
+
+    @property
+    def itl_p50_s(self) -> float | None:
+        return round(percentile(self.intervals, 0.50), 3) if self.intervals else None
+
+    @property
+    def itl_p95_s(self) -> float | None:
+        return round(percentile(self.intervals, 0.95), 3) if self.intervals else None
+
+    @property
+    def cache_ratio(self) -> float | None:
+        """Share of the prompt the server said it served from its cache.
+
+        ``None`` when the server reports no usage detail at all — which is
+        different from 0%, a server that looked and found nothing cached.
+        """
+        cached, prompt = self.cached_tokens, self.prompt_tokens
+        if cached is None or not prompt:
+            return None
+        return max(0.0, min(1.0, cached / prompt))
 
     @property
     def truncated(self) -> bool:
@@ -90,9 +131,13 @@ class ChatResult:
             "completion_tokens": self.completion_tokens,
             "reasoning_tokens": self.reasoning_tokens,
             "cached_tokens": self.cached_tokens,
+            "cache_ratio": round(self.cache_ratio, 4) if self.cache_ratio is not None else None,
             "ttft_s": round(self.ttft_s, 3) if self.ttft_s is not None else None,
             "total_s": round(self.total_s, 2),
             "tok_per_s": round(self.tok_per_s, 1) if self.tok_per_s is not None else None,
+            "tok_per_s_wall": round(self.tok_per_s_wall, 1) if self.tok_per_s_wall is not None else None,
+            "itl_p50_s": self.itl_p50_s,
+            "itl_p95_s": self.itl_p95_s,
             "finish_reason": self.finish_reason,
             "answer_chars": len(self.content),
             "reasoning_chars": len(self.reasoning),
@@ -291,6 +336,8 @@ class ChatClient:
         served: str | None = None
         ttft: float | None = None
         chunks = 0
+        intervals: list[float] = []
+        last_at: float | None = None
         pending: list[str] = []  # chunks seen before the first delta
 
         for raw_line in resp:
@@ -326,8 +373,12 @@ class ChatClient:
                 piece = _text_of(delta.get("content"))
                 think = _text_of(delta.get("reasoning_content") or delta.get("reasoning") or delta.get("thinking"))
                 if piece or think:
+                    now = time.perf_counter()
                     if ttft is None:
-                        ttft = time.perf_counter() - t0
+                        ttft = now - t0
+                    elif last_at is not None:
+                        intervals.append(now - last_at)
+                    last_at = now
                     if piece:
                         content.append(piece)
                     if think:
@@ -358,6 +409,7 @@ class ChatClient:
             chunks=chunks,
             streamed=True,
             http_status=status,
+            intervals=intervals,
         )
 
     # -- non-streaming --------------------------------------------------- #

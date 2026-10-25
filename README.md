@@ -60,12 +60,14 @@ a confidence interval on every score       a price on every solve
 - [Install](#install)
 - [Configure a target](#configure-a-target)
 - [Run it](#run-it)
+- [Watch it run live](#watch-it-run-live)
 - [Compare models](#compare-models)
 - [Is the gap real?](#is-the-gap-real)
 - [Did it beat the baseline?](#did-it-beat-the-baseline)
 - [What it costs](#what-it-costs)
 - [Share a scorecard](#share-a-scorecard)
 - [Rank the runs you have](#rank-the-runs-you-have)
+- [Score over time](#score-over-time)
 - [What is actually measured](#what-is-actually-measured)
 - [The suites](#the-suites)
 - [Beyond coding](#beyond-coding)
@@ -199,6 +201,8 @@ key. `[project]` sets the default `suite` and extra `suite_paths`.
 | `modelbench card` | render a run as a 1200×675 SVG/PNG scorecard |
 | `modelbench compare` | is a run actually different from the baseline? |
 | `modelbench leaderboard` | rank local runs; overlapping intervals share a place |
+| `modelbench tui` | watch a run live: progress, in-flight task, tok/s |
+| `modelbench history` | one target's runs in order, with deltas and a sparkline |
 | `modelbench init-suite` | scaffold a new suite with one example task |
 
 ```bash
@@ -233,6 +237,7 @@ Useful flags:
 | `--out DIR`, `--name LABEL` | where to write, and how the run is labelled |
 | `--no-report` | skip `REPORT.md` (write it later with `modelbench report`) |
 | `--dry-run` | print the plan — tasks, caps, prompt size, call count, token ceiling — and exit without calling the endpoint |
+| `--tui` | draw the live dashboard instead of scrolling progress lines |
 | `--fail-under SCORE` | exit 1 if the mean final task score lands below SCORE (`0.9` or `90`), for CI gates |
 | `--no-html`, `--html PATH` | skip the HTML page, or write it somewhere specific |
 | `--allow-missing-runners` | skip tasks whose runtime is absent instead of failing them |
@@ -241,6 +246,70 @@ Useful flags:
 
 Exit codes: `0` complete, `1` completed with task errors, `2` configuration or
 usage error, `130` interrupted (partial results are kept).
+
+## Watch it run live
+
+A full suite takes twenty minutes to an hour, and the progress lines scroll
+away. The dashboard answers the three questions you actually have while
+waiting — is it moving, how fast, and will it finish before I go to bed:
+
+```bash
+modelbench run --target local --tui      # draw it while the run is writing
+modelbench tui runs/local-core-v2-…      # or watch a run from another shell
+modelbench tui                           # or replay the newest run in runs/
+```
+
+```text
+ modelbench  core-v2 2.2 · qwen38          running  12m 38.1s  ETA 4m 12.7s
+────────────────────────────────────────────────────────────────────────────
+ ██████████████████████████████░░░░░░░░░░  75%  12/16 pairs
+  task                              s1    s2    t/s    state  protocol
+  t01_weighted_jobs               100%  100%   52.4     done  ·
+  t02_text_justify                100%  100%   51.8     done  ·
+  t03_json_parser                  90%   90%   50.9     done  ·
+  t04_sql_report                   80%   90%   49.7     done  ·
+  t05_csv_pivot                    70%   80%   48.2     done  ·
+  t06_rate_limiter                100%  100%   47.6     done  ·
+  t07_lru_cache                     ·    -      ·  running  ·
+  t08_cli_args                      -    -      ·  pending  ·
+
+  now  t07_lru_cache s1 · first · 1m 36.1s
+  ██▇▇▅▅▄▄▁▁▁▁  50.9 tok/s median · 8,400 tok
+  errors 0 · local-core-v2-20261025-200000
+
+  q quit · space pause · r refresh
+```
+
+The `now` line names the attempt in flight and how long it has been running, so
+a task that is stuck looks different from a run that is slow. The bottom line
+is the run's median decode rate over a sparkline of every completed call: a
+model that starts at 50 tok/s and drifts to 20 is telling you something about
+its KV cache, not about its quality.
+
+Keys: `q` quits, `space` pauses the display (the run keeps going), `r` forces a
+re-read. `q` is deliberately disabled while a run is writing — quitting would
+close the terminal and take the run with it; `Ctrl-C` still stops everything,
+and partial results stay on disk.
+
+| flag | what it does |
+|---|---|
+| `--once` | draw one frame and exit (good for logs and screenshots) |
+| `--json` | print the same numbers as JSON, for a status bar or a script |
+| `--follow` | keep watching after the run finishes |
+| `--interval SEC` | refresh period, default 0.25 |
+| `--frames N` | stop after N frames |
+| `--ascii` | plain glyphs, for a terminal without block drawing |
+| `--wait` | watch a directory that does not exist yet |
+
+It reads three files and writes none: `run.json` (what the run claims to be),
+`results.jsonl` (what has been graded) and `events.jsonl` (attempts starting
+and ending). The event log is a *view* of the run, never the source of truth:
+delete it and every report is still exact, you just lose the live picture. Lines
+are appended and flushed per event, so `tail -f` works as well as the TUI —
+`{"kind": "attempt_started", "task": "t07_lru_cache", "sample": 1, "phase":
+"first", "t": 1767…}` is a complete statement of what is happening.
+
+When stdout is not a terminal, `--tui` falls back to the scrolling log.
 
 ## Compare models
 
@@ -399,6 +468,44 @@ frontier: nobody beats that run on both score and token spend. Mixed suites are
 refused by default — two suites are two scales — and `--allow-mixed` prints the
 warning and ranks anyway.
 
+## Score over time
+
+A leaderboard answers "who is best today". The question that decides whether a
+new quant, a new sampler default or a new build actually changed anything is
+"what did this model score last time, and is today's number inside the noise of
+yesterday's":
+
+```bash
+modelbench history runs/*                 # every run, oldest first, with deltas
+modelbench history runs/* --by final      # trace the post-repair score instead
+modelbench history runs/* --md            # a table to paste into a note
+modelbench history runs/* --json          # the same rows for a chart
+```
+
+```text
+2 run(s), oldest first · ranked by the first-attempt score
+
+when              target   suite        smp   records   score          95% CI    delta  tok/s
+2026-10-25 20:00  qwen38   core-v2        2   12/16     91.7%      84.2–98.3%        —   50.3
+2026-10-26 09:00  qwen38   core-v2        2   12/16     97.9%     94.6–100.0%  +6.2 pp   50.3
+
+qwen38 ▁█  92 -> 98
+
+2 runs for 1 target(s); latest qwen38 97.9% (+6.2 pp vs first)
+```
+
+Two things it refuses to do quietly:
+
+- **Mix suites.** If the suite digest changed between two runs of the same
+  target, a delta measures the benchmark as much as the model, so the output
+  says which series moved instead of drawing one arrow through both.
+- **Invent a baseline.** The first run of a target has no delta, and a target
+  seen once gets no sparkline. A missing comparison is reported as missing.
+
+A delta here is a difference of means, not a significance test — for that, use
+`modelbench compare BASE RUN`, which reports the paired sign test and the
+bootstrap interval on the gap.
+
 ## What is actually measured
 
 One **attempt** is one request/response. Its score is
@@ -437,6 +544,37 @@ Other rules that are part of the protocol, not implementation details:
   the raw log and excluded from grading. Verbosity is measured, not rewarded.
 - **Warm-up.** One tiny request is sent before the first graded task, so the
   first task does not pay the model-load cost. Disable with `--no-warmup`.
+
+### Three speeds, and where the time went
+
+A single "tok/s" hides the thing people actually care about. Every attempt
+records five separate measurements, because they can rank two servers in
+opposite orders:
+
+| field | what it is |
+|---|---|
+| `ttft_s` | time to the first token: the pause before anything appears |
+| `itl_p50_s` / `itl_p95_s` | gap between stream chunks — p50 is the rhythm, p95 is the stutter |
+| `tok_per_s` | completion tokens ÷ (total − TTFT): decode speed, comparable across prompt lengths |
+| `tok_per_s_wall` | completion tokens ÷ total: what a person waiting actually experiences |
+| `cache_ratio` | share of the prompt the server said it served from cache |
+
+Inter-token time is chunk pacing, not per-token latency: a server that flushes
+one token per chunk (llama.cpp) makes the two coincide, a server that batches
+ten does not. It is reported as "inter-token", never as "latency", for that
+reason. `cache_ratio` is `None` when the server reports no cache detail at all
+and `0.0` when it looked and found nothing cached — those are different facts
+and the report keeps them apart.
+
+Reports gain a **Timing and budget** section: TTFT p50/p95, inter-token
+p50/p95, decode and end-to-end rates, cache hit rate, the share of wall clock
+spent generating rather than grading, tokens per solved task, and score per
+1,000 output tokens. Rows nothing measured are omitted rather than printed as
+zero, so a run from modelbench 2.x still reports cleanly — it just shows fewer
+rows.
+
+Records carry `record_version: 3`. Older records remain readable: every
+aggregate treats a missing field as "not measured".
 
 ## The suites
 
@@ -538,6 +676,10 @@ fonts, no network access, and it renders the same from disk in five years.
   wall time, tokens, estimated cost, cost per solved task.
 - **Per task** — the same scores per task with deltas and a task-win count.
   This is where you see *which kind* of work a model is bad at.
+- **Timing and budget** — TTFT, stream pacing, decode and end-to-end rates,
+  prompt cache hit rate, generation share of wall clock, tokens per solved
+  task, score per 1k output tokens. "Fast" is three claims; this table keeps
+  them apart.
 - **Per category** — the same data grouped by category.
 - **Where it fails** — failing assertions grouped by name, so "fails
   `handles_negative_input` in both samples of two tasks" is visible as a
@@ -876,6 +1018,9 @@ src/modelbench/
   runner.py        sample × task loop, retries, records
   report.py        metrics, pairwise comparison, markdown/JSON reports
   stats.py         bootstrap intervals and the exact sign test
+  events.py        append-only events.jsonl (a view of a live run)
+  tui.py           the live dashboard: pure frame renderer + curses driver
+  history.py       one target's runs in order, with deltas and a sparkline
   card.py          the 1200×675 SVG scorecard
   leaderboard.py   ranks local runs, ties overlapping intervals
   extraction.py    code-fence and ### FILE: extraction
@@ -892,6 +1037,7 @@ Run directories are self-describing:
 runs/local-core-v2-20260101-120000/
   run.json            manifest: target, suite digest, sampling, status
   results.jsonl       one JSON record per task × sample
+  events.jsonl        one line per attempt start/end (feeds the TUI; deletable)
   s1/raw/<task>.txt   verbatim model output (plus .repair.txt)
   s1/sol/<task>.solution.py
   errors.log          only present when something failed
